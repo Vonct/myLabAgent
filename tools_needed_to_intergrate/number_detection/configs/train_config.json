@@ -1,0 +1,10 @@
+{
+  "data_root": "./data",
+  "checkpoint_dir": "./checkpoints",
+  "batch_size": 128,
+  "num_epochs": 5,
+  "learning_rate": 0.001,
+  "num_workers": 0,
+  "device": "auto",
+  "seed": 42
+}

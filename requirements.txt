@@ -1,0 +1,8 @@
+openai
+streamlit
+chromadb
+pypdf
+tiktoken
+torch
+torchvision
+pillow

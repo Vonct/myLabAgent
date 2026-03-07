@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+*$py.class
+.venv39/
+venv/
+env/
+.env
+chroma_db/
+uploads/
+vip_config.json
+.trae/

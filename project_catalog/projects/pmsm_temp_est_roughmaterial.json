@@ -1,0 +1,80 @@
+{
+  "id": "pmsm_temp_est_roughmaterial",
+  "title": "PMSM 电机温度估计与实时部署",
+  "summary": "围绕高功率密度电机的温度监测，构建基于神经网络与低阶 LPTN 结合的在线估计方案，并在 Tricore/PPU 上完成部署验证。",
+  "category": "电机控制与状态估计",
+  "keywords": [
+    "PMSM",
+    "Temperature Estimation",
+    "LPTN",
+    "Neural Network",
+    "PPU Deployment",
+    "Real-time"
+  ],
+  "source": {
+    "file": "pmsm_temp_est_roughMaterial.docx"
+  },
+  "detail": {
+    "background": "电机功率密度提升导致热场更加复杂，关键部件温度若失控会引发绝缘失效与永磁体退磁风险。",
+    "method": "使用神经网络校正功率损耗与低阶 LPTN 参数，提升温度估计精度与泛化能力。",
+    "result": "部署测试与仿真结果一致，PPU 单次计算速度相较 Tricore 提升约 28 倍。",
+    "highlights": [
+      "聚焦工程可部署的温度估计链路",
+      "兼顾物理模型可解释性与数据驱动精度",
+      "已完成 PPU 实时运行验证"
+    ]
+  },
+  "sections": [
+    {
+      "heading": "项目背景",
+      "details": [
+        "电动汽车性能提升驱动电机热管理难度上升",
+        "过热可能导致绕组绝缘失效与永磁体退磁",
+        "精确温度估计对安全与控制精度均关键"
+      ],
+      "slide": 1,
+      "images": [
+        "media/pmsm_temp_est_roughmaterial/img_001.png",
+        "media/pmsm_temp_est_roughmaterial/img_002.png"
+      ]
+    },
+    {
+      "heading": "算法方案",
+      "details": [
+        "神经网络校正功率损耗与低阶 LPTN 参数",
+        "捕捉热参数与损耗随工况变化的时变特性",
+        "相较复杂先验建模，拟合方式更通用"
+      ],
+      "slide": 2,
+      "images": [
+        "media/pmsm_temp_est_roughmaterial/img_003.png",
+        "media/pmsm_temp_est_roughmaterial/img_004.png"
+      ]
+    },
+    {
+      "heading": "部署路径",
+      "details": [
+        "通过工具箱生成代码并完成 PPU 编译烧录",
+        "算法分别部署在 Tricore 与 PPU",
+        "在相同运行次数下对比 Simulink 与实机表现"
+      ],
+      "slide": 3,
+      "images": [
+        "media/pmsm_temp_est_roughmaterial/img_005.png"
+      ]
+    },
+    {
+      "heading": "结果与结论",
+      "details": [
+        "Simulink 仿真与部署测试结果一致",
+        "PPU 单次计算耗时显著低于 Tricore",
+        "整体计算速度提升约 28 倍，满足实时性目标"
+      ],
+      "slide": 4,
+      "images": [
+        "media/pmsm_temp_est_roughmaterial/img_006.png"
+      ]
+    }
+  ],
+  "cover_image": "media/pmsm_temp_est_roughmaterial/img_001.png"
+}

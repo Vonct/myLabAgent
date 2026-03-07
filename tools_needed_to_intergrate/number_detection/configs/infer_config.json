@@ -1,0 +1,8 @@
+{
+  "model_path": "./checkpoints/best_model.pth",
+  "image_path": "samples/digits/digit_0_0.png",
+  "output_json": "./outputs/infer_result.json",
+  "device": "auto",
+  "invert": false,
+  "normalize": true
+}

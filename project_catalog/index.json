@@ -1,0 +1,10 @@
+{
+  "projects": [
+    {
+      "id": "pmsm_temp_est_roughmaterial",
+      "category": "电机控制与状态估计",
+      "display_order": 1,
+      "enabled": true
+    }
+  ]
+}

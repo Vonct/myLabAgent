@@ -1,0 +1,12 @@
+{
+  "users": [
+    {
+      "username": "debug_user",
+      "password_sha256": "your_password_sha256_here",
+      "api_key": "sk-your-dashscope-key",
+      "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      "llm_model": "qwen3.5-plus",
+      "embedding_model": "text-embedding-v4"
+    }
+  ]
+}
