@@ -12,12 +12,6 @@ def render_chat_tab(chat_ready: bool, chat_upload_dir: Path):
     if "uploader_key" not in st.session_state:
         st.session_state.uploader_key = 0
     
-    # 思考模式切换开关
-    col_title, col_mode = st.columns([3, 1])
-    with col_mode:
-        reasoning_mode = st.toggle("🧠 深度思考模式", value=st.session_state.get("reasoning_mode", False), key="reasoning_mode_toggle")
-        st.session_state.reasoning_mode = reasoning_mode
-
     message_container = st.container()
     with message_container:
         for message in st.session_state.messages:
@@ -28,25 +22,30 @@ def render_chat_tab(chat_ready: bool, chat_upload_dir: Path):
                     with st.expander("🖼️ 查看图片附件", expanded=False):
                         st.image(image_path, width="stretch")
 
-    with st.expander("📎 添加图片附件", expanded=False):
-        uploaded_chat_image = st.file_uploader(
-            "上传图片",
-            type=["png", "jpg", "jpeg", "bmp", "webp"],
-            accept_multiple_files=False,
-            key=f"chat_image_uploader_{st.session_state.uploader_key}",
-            label_visibility="collapsed",
-        )
-        if uploaded_chat_image is not None:
-            chat_upload_dir.mkdir(parents=True, exist_ok=True)
-            image_bytes = uploaded_chat_image.getvalue()
-            suffix = Path(uploaded_chat_image.name).suffix.lower() or ".png"
-            image_hash = hashlib.sha256(image_bytes).hexdigest()[:16]
-            saved_image_path = chat_upload_dir / f"{image_hash}{suffix}"
-            if not saved_image_path.exists():
-                with open(saved_image_path, "wb") as fw:
-                    fw.write(image_bytes)
-            st.session_state.pending_chat_image_path = str(saved_image_path)
-            st.session_state.pending_chat_image_name = uploaded_chat_image.name
+    attachment_col, toggle_col = st.columns([5, 1])
+    with toggle_col:
+        reasoning_mode = st.toggle("🧠 深度思考", value=st.session_state.get("reasoning_mode", False), key="reasoning_mode_toggle")
+        st.session_state.reasoning_mode = reasoning_mode
+    with attachment_col:
+        with st.expander("📎 添加图片附件", expanded=False):
+            uploaded_chat_image = st.file_uploader(
+                "上传图片",
+                type=["png", "jpg", "jpeg", "bmp", "webp"],
+                accept_multiple_files=False,
+                key=f"chat_image_uploader_{st.session_state.uploader_key}",
+                label_visibility="collapsed",
+            )
+            if uploaded_chat_image is not None:
+                chat_upload_dir.mkdir(parents=True, exist_ok=True)
+                image_bytes = uploaded_chat_image.getvalue()
+                suffix = Path(uploaded_chat_image.name).suffix.lower() or ".png"
+                image_hash = hashlib.sha256(image_bytes).hexdigest()[:16]
+                saved_image_path = chat_upload_dir / f"{image_hash}{suffix}"
+                if not saved_image_path.exists():
+                    with open(saved_image_path, "wb") as fw:
+                        fw.write(image_bytes)
+                st.session_state.pending_chat_image_path = str(saved_image_path)
+                st.session_state.pending_chat_image_name = uploaded_chat_image.name
     active_image_path = st.session_state.pending_chat_image_path
     if active_image_path and Path(active_image_path).exists():
         with st.expander("🖼️ 待发送图片预览", expanded=True):

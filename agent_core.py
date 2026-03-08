@@ -1,6 +1,6 @@
 import json
 import subprocess
-import os
+import sys
 from pathlib import Path
 from typing import List, Dict, Any, Generator
 from openai import OpenAI
@@ -148,6 +148,25 @@ class DocumentAgent:
             
         return final_content, str(reasoning) if reasoning else ""
 
+    def _resolve_infer_pythons(self, base_dir: Path) -> List[Path]:
+        candidates = [Path(sys.executable)]
+        for candidate in [
+            base_dir / ".venv" / "Scripts" / "python.exe",
+            base_dir / ".venv" / "bin" / "python"
+        ]:
+            if candidate.exists():
+                candidates.append(candidate)
+
+        seen = set()
+        unique_candidates: List[Path] = []
+        for candidate in candidates:
+            candidate_str = str(candidate.resolve()) if candidate.exists() else str(candidate)
+            if candidate_str in seen:
+                continue
+            seen.add(candidate_str)
+            unique_candidates.append(candidate)
+        return unique_candidates
+
     def chat(self, messages: List[Dict[str, str]], reasoning_mode: bool = False) -> Generator[Dict[str, Any], None, None]:
         """
         核心对话循环：接收消息 -> 思考(LLM) -> 行动(Tool) -> 再思考 -> 生成回答
@@ -158,20 +177,13 @@ class DocumentAgent:
             reasoning_mode: 是否开启深度思考模式
         """
         # 1. 构造完整的对话历史
-        system_content = self.system_prompt
-        if reasoning_mode:
-            system_content += "\n\n请启用深度思考模式：在回答之前，请先进行详细的逻辑分析和推理，特别是针对复杂的技术问题。请逐步分析问题，权衡可能的解决方案，然后给出最终答案。"
-            
-        full_messages = [{"role": "system", "content": system_content}] + messages
+        full_messages = [{"role": "system", "content": self.system_prompt}] + messages
         
         # 2. 第一次调用 LLM：思考并决定是否调用工具
         try:
-            # 预留参数接口，未来可根据 SDK 更新传入特定思考参数
             extra_params = {}
             if reasoning_mode:
-                # 示例：如果未来 SDK 支持 explicit reasoning 参数，可以在这里添加
-                # extra_params["temperature"] = 0.7 
-                pass
+                extra_params["extra_body"] = {"enable_thinking": True}
 
             response = self.client.chat.completions.create(
                 model=self.llm_model,
@@ -227,14 +239,10 @@ class DocumentAgent:
                         
                         try:
                             base_dir = Path(__file__).parent
-                            infer_python = Path(r"C:\ProgramData\Anaconda3\envs\pytorch\python.exe")
                             service_script = base_dir / "digit_infer_service.py"
-                            
-                            if not infer_python.exists():
-                                infer_content = json.dumps({
-                                    "error": f"推理环境未找到: {infer_python}。请确保该 conda 环境可用。"
-                                }, ensure_ascii=False)
-                            else:
+
+                            infer_content = None
+                            for infer_python in self._resolve_infer_pythons(base_dir):
                                 cmd = [
                                     str(infer_python),
                                     str(service_script),
@@ -256,22 +264,22 @@ class DocumentAgent:
                                     encoding='utf-8',
                                     cwd=str(base_dir) # Ensure cwd is correct for relative paths
                                 )
-                                
+
                                 if proc.returncode != 0:
-                                    infer_content = json.dumps({
-                                        "error": f"推理服务执行失败 (Exit {proc.returncode}): {proc.stderr.strip() or proc.stdout.strip()}"
-                                    }, ensure_ascii=False)
-                                else:
-                                    # Output should be valid JSON
-                                    infer_content = proc.stdout.strip()
-                                    # Validate JSON
-                                    try:
-                                        json.loads(infer_content)
-                                    except json.JSONDecodeError:
-                                         infer_content = json.dumps({
-                                            "error": f"无法解析推理结果: {infer_content}",
-                                            "raw_output": infer_content
-                                         }, ensure_ascii=False)
+                                    continue
+
+                                output_text = proc.stdout.strip()
+                                try:
+                                    json.loads(output_text)
+                                    infer_content = output_text
+                                    break
+                                except json.JSONDecodeError:
+                                    continue
+
+                            if infer_content is None:
+                                infer_content = json.dumps({
+                                    "error": "请检查python解释器是否安装了所需依赖库"
+                                }, ensure_ascii=False)
                         except Exception as e:
                             infer_content = json.dumps({"error": f"调用推理工具时发生异常: {str(e)}"}, ensure_ascii=False)
 

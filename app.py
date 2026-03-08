@@ -295,12 +295,14 @@ if "pending_chat_image_path" not in st.session_state:
     st.session_state.pending_chat_image_path = None
 if "pending_chat_image_name" not in st.session_state:
     st.session_state.pending_chat_image_name = ""
+if "auth_mode" not in st.session_state:
+    st.session_state.auth_mode = "手动输入"
 
 # 2. 侧边栏：API Key 和 文件上传
 with st.sidebar:
     st.title("⚙️ 配置与控制台")
 
-    auth_mode = st.radio("认证方式", ["手动输入", "VIP登录"], horizontal=True)
+    auth_mode = st.radio("认证方式", ["手动输入", "VIP登录"], key="auth_mode", horizontal=True)
 
     selected_llm_model = ""
     selected_embedding_model = ""

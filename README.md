@@ -81,6 +81,17 @@
 python -c "import hashlib; print(hashlib.sha256('你的密码'.encode()).hexdigest())"
 ```
 
+## 🔢 手写数字识别的跨电脑配置
+
+数字识别工具会按以下顺序查找 Python 解释器：
+- 当前运行应用的 Python
+- 项目目录下 `.venv`
+
+推荐两台电脑统一做法：
+1. 在项目根目录创建并使用同名环境（推荐 `.venv`）。
+2. 在该环境安装依赖：`pip install -r requirements.txt`。
+3. 先用当前应用 Python 运行，若失败会自动回退到项目 `.venv`，两者都不可用会提示检查依赖。
+
 ## ⚠️ 注意事项
 - 当前支持 LLM 模型为 `qwen3.5-plus`，Embedding 模型为 `text-embedding-v4`，通过下拉列表选择后点击 `Apply 配置` 生效。
 - 确保您的 API Key 余额充足，且网络环境可正常访问阿里云百炼兼容接口。
