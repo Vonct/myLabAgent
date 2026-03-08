@@ -167,7 +167,7 @@ class DocumentAgent:
             unique_candidates.append(candidate)
         return unique_candidates
 
-    def chat(self, messages: List[Dict[str, str]], reasoning_mode: bool = False) -> Generator[Dict[str, Any], None, None]:
+    def chat(self, messages: List[Dict[str, Any]], reasoning_mode: bool = False, supports_thinking: bool = True) -> Generator[Dict[str, Any], None, None]:
         """
         核心对话循环：接收消息 -> 思考(LLM) -> 行动(Tool) -> 再思考 -> 生成回答
         使用生成器流式返回每一步的状态，以便 UI 展示
@@ -182,7 +182,7 @@ class DocumentAgent:
         # 2. 第一次调用 LLM：思考并决定是否调用工具
         try:
             extra_params = {}
-            if reasoning_mode:
+            if reasoning_mode and supports_thinking:
                 extra_params["extra_body"] = {"enable_thinking": True}
 
             response = self.client.chat.completions.create(

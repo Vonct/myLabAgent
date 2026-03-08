@@ -12,11 +12,17 @@ from ui_tabs.projects_tab import render_projects_tab
 VIP_CONFIG_PATH = os.path.join(os.path.dirname(__file__), "vip_config.json")
 SUPPORTED_LLM_MODELS = ["qwen3.5-plus","MiniMax-M2.5"]
 SUPPORTED_EMBEDDING_MODELS = ["text-embedding-v4"]
+MODEL_CAPABILITIES = {
+    "qwen3.5-plus": {"supports_image_input": True, "supports_thinking": True},
+    "MiniMax-M2.5": {"supports_image_input": False, "supports_thinking": False},
+    "kimi-k2.5": {"supports_image_input": True, "supports_thinking": True},
+}
 DEFAULT_LLM_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 DEFAULT_EMBEDDING_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 PRESET_LLM_BASE_URLS = {
     "qwen3.5-plus": "https://dashscope.aliyuncs.com/compatible-mode/v1",
     "MiniMax-M2.5": "https://api.minimaxi.com/v1",
+    "kimi-k2.5": "https://api.moonshot.cn/v1",
 }
 PRESET_EMBEDDING_BASE_URLS = {
     "text-embedding-v4": "https://dashscope.aliyuncs.com/compatible-mode/v1",
@@ -53,23 +59,52 @@ def resolve_model_base_url(model_name: str, preset_base_urls: dict, default_base
     return preset_base_urls.get(model_name, default_base_url)
 
 
-def _normalize_model_pool(raw_pool):
+def _to_bool(value, default: bool):
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+    return bool(value)
+
+
+def resolve_llm_capabilities(model_name: str, config: dict | None = None):
+    base = MODEL_CAPABILITIES.get(model_name, {"supports_image_input": False, "supports_thinking": False})
+    if not isinstance(config, dict):
+        return {
+            "supports_image_input": bool(base.get("supports_image_input", False)),
+            "supports_thinking": bool(base.get("supports_thinking", False)),
+        }
+    return {
+        "supports_image_input": _to_bool(config.get("supports_image_input"), bool(base.get("supports_image_input", False))),
+        "supports_thinking": _to_bool(config.get("supports_thinking"), bool(base.get("supports_thinking", False))),
+    }
+
+
+def _normalize_model_pool(raw_pool, with_llm_capabilities: bool = False):
     normalized = {}
     if not isinstance(raw_pool, dict):
         return normalized
     for model_name, model_config in raw_pool.items():
         if isinstance(model_config, dict):
-            normalized[model_name] = {
+            item = {
                 "api_key": model_config.get("api_key", ""),
                 "base_url": model_config.get("base_url", ""),
             }
+            if with_llm_capabilities:
+                item.update(resolve_llm_capabilities(model_name, model_config))
+            normalized[model_name] = item
         elif isinstance(model_config, str):
-            normalized[model_name] = {"api_key": model_config, "base_url": ""}
+            item = {"api_key": model_config, "base_url": ""}
+            if with_llm_capabilities:
+                item.update(resolve_llm_capabilities(model_name))
+            normalized[model_name] = item
     return normalized
 
 
 def resolve_vip_model_pools(profile: dict):
-    llm_pool = _normalize_model_pool(profile.get("llm_models"))
+    llm_pool = _normalize_model_pool(profile.get("llm_models"), with_llm_capabilities=True)
     embedding_pool = _normalize_model_pool(profile.get("embedding_models"))
     if not llm_pool:
         legacy_llm_keys = profile.get("llm_api_keys_by_model", {})
@@ -78,7 +113,15 @@ def resolve_vip_model_pools(profile: dict):
                 llm_pool[model_name] = {
                     "api_key": api_key,
                     "base_url": resolve_model_base_url(model_name, PRESET_LLM_BASE_URLS, DEFAULT_LLM_BASE_URL),
+                    **resolve_llm_capabilities(model_name),
                 }
+    if not llm_pool and profile.get("llm_model") and profile.get("api_key"):
+        model_name = profile.get("llm_model")
+        llm_pool[model_name] = {
+            "api_key": profile.get("api_key", ""),
+            "base_url": profile.get("base_url", resolve_model_base_url(model_name, PRESET_LLM_BASE_URLS, DEFAULT_LLM_BASE_URL)),
+            **resolve_llm_capabilities(model_name, profile),
+        }
     if not embedding_pool:
         legacy_embedding_keys = profile.get("embedding_api_keys_by_model", {})
         if isinstance(legacy_embedding_keys, dict):
@@ -87,6 +130,12 @@ def resolve_vip_model_pools(profile: dict):
                     "api_key": api_key,
                     "base_url": resolve_model_base_url(model_name, PRESET_EMBEDDING_BASE_URLS, DEFAULT_EMBEDDING_BASE_URL),
                 }
+    if not embedding_pool and profile.get("embedding_model") and profile.get("api_key"):
+        model_name = profile.get("embedding_model")
+        embedding_pool[model_name] = {
+            "api_key": profile.get("api_key", ""),
+            "base_url": profile.get("base_url", resolve_model_base_url(model_name, PRESET_EMBEDDING_BASE_URLS, DEFAULT_EMBEDDING_BASE_URL)),
+        }
     return llm_pool, embedding_pool
 
 # 页面配置
@@ -306,6 +355,7 @@ with st.sidebar:
 
     selected_llm_model = ""
     selected_embedding_model = ""
+    selected_llm_capabilities = {"supports_image_input": False, "supports_thinking": False}
     effective_llm_api_key = ""
     effective_llm_base_url = DEFAULT_LLM_BASE_URL
     effective_embedding_api_key = ""
@@ -314,6 +364,7 @@ with st.sidebar:
     if auth_mode == "手动输入":
         selected_llm_model = st.selectbox("LLM 模型", options=SUPPORTED_LLM_MODELS, index=0, key="manual_llm_model")
         selected_embedding_model = st.selectbox("Embedding 模型", options=SUPPORTED_EMBEDDING_MODELS, index=0, key="manual_embedding_model")
+        selected_llm_capabilities = resolve_llm_capabilities(selected_llm_model)
         effective_llm_base_url = resolve_model_base_url(selected_llm_model, PRESET_LLM_BASE_URLS, DEFAULT_LLM_BASE_URL)
         effective_embedding_base_url = resolve_model_base_url(
             selected_embedding_model,
@@ -352,6 +403,7 @@ with st.sidebar:
             if llm_options:
                 selected_llm_model = st.selectbox("LLM 模型", options=llm_options, index=0, key="vip_llm_model")
                 selected_llm_conf = llm_pool.get(selected_llm_model, {})
+                selected_llm_capabilities = resolve_llm_capabilities(selected_llm_model, selected_llm_conf)
                 effective_llm_api_key = selected_llm_conf.get("api_key", "")
                 effective_llm_base_url = selected_llm_conf.get("base_url") or resolve_model_base_url(
                     selected_llm_model,
@@ -474,4 +526,9 @@ chat_ready = bool(effective_llm_api_key and st.session_state.agent)
 with tab_projects:
     render_projects_tab(PROJECT_CATALOG_DIR, PROJECT_INDEX_FILE, PROJECTS_DIR)
 with tab_chat:
-    render_chat_tab(chat_ready, CHAT_UPLOAD_DIR)
+    render_chat_tab(
+        chat_ready,
+        CHAT_UPLOAD_DIR,
+        supports_image_input=selected_llm_capabilities["supports_image_input"],
+        supports_thinking=selected_llm_capabilities["supports_thinking"],
+    )

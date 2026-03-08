@@ -73,8 +73,11 @@
 ## 🔐 VIP 本地登录（调试模式）
 
 1. 复制 `vip_config.example.json` 为 `vip_config.json`。
-2. 在 `vip_config.json` 中填写用户名、密码哈希、API Key 与模型配置。
-3. 启动后在侧边栏切换为“VIP登录”并输入账号密码。
+2. 在 `vip_config.json` 中填写用户名、密码哈希、模型 API Key 与 base_url。
+3. 可在每个 LLM 模型下配置能力开关：
+   - `supports_image_input`: 是否支持图片输入（多模态）
+   - `supports_thinking`: 是否支持 `enable_thinking` 参数
+4. 启动后在侧边栏切换为“VIP登录”并输入账号密码。
 
 密码哈希可用以下方式生成：
 ```bash
@@ -94,5 +97,7 @@ python -c "import hashlib; print(hashlib.sha256('你的密码'.encode()).hexdige
 
 ## ⚠️ 注意事项
 - 当前支持 LLM 模型为 `qwen3.5-plus`，Embedding 模型为 `text-embedding-v4`，通过下拉列表选择后点击 `Apply 配置` 生效。
+- 图片附件会直接以多模态消息传入 LLM；若当前模型不支持图片输入，附件入口会自动禁用。
+- 深度思考模式会按模型能力自动控制；不支持该参数的模型会自动关闭该开关。
 - 确保您的 API Key 余额充足，且网络环境可正常访问阿里云百炼兼容接口。
 - `vip_config.json` 内含敏感信息，请勿提交到公共仓库。

@@ -3,9 +3,26 @@
     {
       "username": "debug_user",
       "password_sha256": "your_password_sha256_here",
-      "api_key": "sk-your-dashscope-key",
-      "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-      "llm_model": "qwen3.5-plus",
+      "llm_models": {
+        "qwen3.5-plus": {
+          "api_key": "sk-your-dashscope-key",
+          "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+          "supports_image_input": true,
+          "supports_thinking": true
+        },
+        "MiniMax-M2.5": {
+          "api_key": "sk-your-minimax-key",
+          "base_url": "https://api.minimaxi.com/v1",
+          "supports_image_input": false,
+          "supports_thinking": false
+        }
+      },
+      "embedding_models": {
+        "text-embedding-v4": {
+          "api_key": "sk-your-dashscope-key",
+          "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1"
+        }
+      },
       "embedding_model": "text-embedding-v4"
     }
   ]

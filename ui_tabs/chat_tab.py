@@ -1,10 +1,23 @@
 import hashlib
+import base64
+import mimetypes
 from pathlib import Path
 
 import streamlit as st
 
 
-def render_chat_tab(chat_ready: bool, chat_upload_dir: Path):
+def _image_path_to_data_url(image_path: str):
+    path_obj = Path(image_path)
+    if not path_obj.exists():
+        return None
+    mime_type, _ = mimetypes.guess_type(str(path_obj))
+    mime_type = mime_type or "image/png"
+    with open(path_obj, "rb") as fr:
+        encoded = base64.b64encode(fr.read()).decode("utf-8")
+    return f"data:{mime_type};base64,{encoded}"
+
+
+def render_chat_tab(chat_ready: bool, chat_upload_dir: Path, supports_image_input: bool, supports_thinking: bool):
     st.title("🤖 智能文档问答 Agent")
     st.caption("基于 OpenAI SDK + Qwen 兼容接口实现 | 支持 RAG、Tool Use、多轮对话")
     if not chat_ready:
@@ -24,28 +37,40 @@ def render_chat_tab(chat_ready: bool, chat_upload_dir: Path):
 
     attachment_col, toggle_col = st.columns([5, 1])
     with toggle_col:
-        reasoning_mode = st.toggle("🧠 深度思考", value=st.session_state.get("reasoning_mode", False), key="reasoning_mode_toggle")
+        if not supports_thinking:
+            st.session_state.reasoning_mode = False
+        reasoning_mode = st.toggle(
+            "🧠 深度思考",
+            value=st.session_state.get("reasoning_mode", False),
+            key="reasoning_mode_toggle",
+            disabled=not supports_thinking
+        )
         st.session_state.reasoning_mode = reasoning_mode
     with attachment_col:
-        with st.expander("📎 添加图片附件", expanded=False):
-            uploaded_chat_image = st.file_uploader(
-                "上传图片",
-                type=["png", "jpg", "jpeg", "bmp", "webp"],
-                accept_multiple_files=False,
-                key=f"chat_image_uploader_{st.session_state.uploader_key}",
-                label_visibility="collapsed",
-            )
-            if uploaded_chat_image is not None:
-                chat_upload_dir.mkdir(parents=True, exist_ok=True)
-                image_bytes = uploaded_chat_image.getvalue()
-                suffix = Path(uploaded_chat_image.name).suffix.lower() or ".png"
-                image_hash = hashlib.sha256(image_bytes).hexdigest()[:16]
-                saved_image_path = chat_upload_dir / f"{image_hash}{suffix}"
-                if not saved_image_path.exists():
-                    with open(saved_image_path, "wb") as fw:
-                        fw.write(image_bytes)
-                st.session_state.pending_chat_image_path = str(saved_image_path)
-                st.session_state.pending_chat_image_name = uploaded_chat_image.name
+        if supports_image_input:
+            with st.expander("📎 添加图片附件", expanded=False):
+                uploaded_chat_image = st.file_uploader(
+                    "上传图片",
+                    type=["png", "jpg", "jpeg", "bmp", "webp"],
+                    accept_multiple_files=False,
+                    key=f"chat_image_uploader_{st.session_state.uploader_key}",
+                    label_visibility="collapsed",
+                )
+                if uploaded_chat_image is not None:
+                    chat_upload_dir.mkdir(parents=True, exist_ok=True)
+                    image_bytes = uploaded_chat_image.getvalue()
+                    suffix = Path(uploaded_chat_image.name).suffix.lower() or ".png"
+                    image_hash = hashlib.sha256(image_bytes).hexdigest()[:16]
+                    saved_image_path = chat_upload_dir / f"{image_hash}{suffix}"
+                    if not saved_image_path.exists():
+                        with open(saved_image_path, "wb") as fw:
+                            fw.write(image_bytes)
+                    st.session_state.pending_chat_image_path = str(saved_image_path)
+                    st.session_state.pending_chat_image_name = uploaded_chat_image.name
+        else:
+            st.session_state.pending_chat_image_path = None
+            st.session_state.pending_chat_image_name = ""
+            st.caption("当前模型不支持图片输入")
     active_image_path = st.session_state.pending_chat_image_path
     if active_image_path and Path(active_image_path).exists():
         with st.expander("🖼️ 待发送图片预览", expanded=True):
@@ -64,14 +89,13 @@ def render_chat_tab(chat_ready: bool, chat_upload_dir: Path):
     if prompt := st.chat_input(chat_placeholder, disabled=not chat_ready):
         send_image_path = st.session_state.pending_chat_image_path
         user_content_for_model = prompt
-        # 如果上传了图片
-        if send_image_path and Path(send_image_path).exists():
-            
-            user_content_for_model = (
-                f"{prompt}\n\n"
-                f"用户附带了一张图片，图片路径为：{send_image_path}\n"
-                "如果问题与图片相关，请结合图片内容进行回答。"
-            )
+        if send_image_path and Path(send_image_path).exists() and supports_image_input:
+            image_data_url = _image_path_to_data_url(send_image_path)
+            if image_data_url:
+                user_content_for_model = [
+                    {"type": "image_url", "image_url": {"url": image_data_url}},
+                    {"type": "text", "text": prompt},
+                ]
         st.session_state.messages.append(
             {
                 "role": "user",
@@ -93,9 +117,12 @@ def render_chat_tab(chat_ready: bool, chat_upload_dir: Path):
                 full_response = ""
                 thought_container = st.status("🤔 Agent 正在思考...", expanded=True)
                 try:
-                    # 获取当前思考模式状态
-                    is_reasoning_mode = st.session_state.get("reasoning_mode", False)
-                    response_generator = st.session_state.agent.chat(st.session_state.messages, reasoning_mode=is_reasoning_mode)
+                    is_reasoning_mode = st.session_state.get("reasoning_mode", False) and supports_thinking
+                    response_generator = st.session_state.agent.chat(
+                        st.session_state.messages,
+                        reasoning_mode=is_reasoning_mode,
+                        supports_thinking=supports_thinking
+                    )
                     for chunk in response_generator:
                         chunk_type = chunk.get("type")
                         if chunk_type == "thought":
