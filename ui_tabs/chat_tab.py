@@ -122,7 +122,7 @@ def render_chat_tab(chat_ready: bool, chat_upload_dir: Path, supports_image_inpu
             with st.chat_message("assistant"):
                 message_placeholder = st.empty()
                 full_response = ""
-                thought_container = st.status("Agent 正在处理...", expanded=True)
+                thought_container = st.status("🤔 Agent 正在处理...", expanded=True)
                 try:
                     is_reasoning_mode = st.session_state.get("reasoning_mode", False) and supports_thinking
                     response_generator = st.session_state.agent.chat(

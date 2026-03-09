@@ -15,7 +15,7 @@ from core.tool_registry import ToolRegistry
 from rag_engine import RAGEngine
 
 
-class DocumentAgent:
+class LabAgent:
     def __init__(
         self,
         api_key: str,

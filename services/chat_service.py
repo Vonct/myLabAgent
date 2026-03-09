@@ -4,7 +4,7 @@ from pathlib import Path
 
 import streamlit as st
 
-from agent_core import DocumentAgent
+from agent_core import LabAgent
 from core.permissions import PermissionLevel, PermissionManager
 from core.prompt_loader import load_prompt
 from core.tool_registry import ToolRegistry
@@ -19,7 +19,7 @@ def build_agent(
     embedding_base_url: str,
     embedding_model: str,
     project_root: Path,
-) -> tuple[RAGEngine, DocumentAgent]:
+) -> tuple[RAGEngine, LabAgent]:
     rag_engine = RAGEngine(embedding_api_key, embedding_base_url, embedding_model)
     permission_manager = PermissionManager(
         {
@@ -29,8 +29,8 @@ def build_agent(
         }
     )
     tool_registry = ToolRegistry(project_root / "config" / "tools.json", permission_manager)
-    prompt = load_prompt(project_root / "prompts" / "document_agent.md")
-    agent = DocumentAgent(
+    prompt = load_prompt(project_root / "prompts" / "lab_agent.md")
+    agent = LabAgent(
         api_key=llm_api_key,
         rag_engine=rag_engine,
         base_url=llm_base_url,
