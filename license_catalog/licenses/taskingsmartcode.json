@@ -1,0 +1,13 @@
+{
+  "id": "taskingsmartcode",
+  "name": "Tasking SmartCode",
+  "logo": "media/tasking_logo.png",
+  "summary": "TC3/4编译器",
+  "licenses": [
+    {
+      "license_name": "Tasking SmartCode",
+      "expired_date": "2026-3-5",
+      "owner": "TongjiInfineonLab"
+    }
+  ]
+}

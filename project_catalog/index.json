@@ -5,6 +5,12 @@
       "category": "电机控制与状态估计",
       "display_order": 1,
       "enabled": true
+    },
+    {
+      "id": "myreader_material",
+      "category": "AI Agent 与内容处理",
+      "display_order": 2,
+      "enabled": true
     }
   ]
 }

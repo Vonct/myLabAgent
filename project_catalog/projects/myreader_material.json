@@ -1,0 +1,28 @@
+{
+  "id": "myreader_material",
+  "title": "MyReader：基于 LLM 的 Web Blog 阅读助手",
+  "summary": "通过技能编排自动完成网页内容理解，输出摘要、翻译与精读版本，并支持网页端卡片化查阅。",
+  "category": "AI Agent 与内容处理",
+  "keywords": [
+    "LLM",
+    "Agent Skills",
+    "Web Reading",
+    "Summarization",
+    "Translation"
+  ],
+  "source": {
+    "file": "Myreader_material.docx"
+  },
+  "detail": {
+    "background": "长篇网页信息提取效率低，人工整理成本高。",
+    "method": "通过技能组件编排完成网页读取、信息抽取和结构化输出。",
+    "result": "形成可复用的阅读助手流程，并支持网页端结果查阅。",
+    "highlights": [
+      "支持摘要、翻译与精读多种输出形态",
+      "流程可迁移到不同 Coding Agent",
+      "已形成可展示的端到端 Demo"
+    ]
+  },
+  "sections": [],
+  "cover_image": "media/myreader_material/image3.png"
+}

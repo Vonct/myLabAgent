@@ -1,0 +1,18 @@
+{
+  "softwares": [
+    {
+      "id": "metaware",
+      "name": "MetaWare",
+      "category": "嵌入式AI",
+      "display_order": 1,
+      "enabled": true
+    },
+    {
+      "id": "taskingsmartcode",
+      "name": "Tasking SmartCode",
+      "category": "嵌入式",
+      "display_order": 2,
+      "enabled": true
+    }
+  ]
+}

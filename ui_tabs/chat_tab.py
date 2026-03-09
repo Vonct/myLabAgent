@@ -17,11 +17,13 @@ def _image_path_to_data_url(image_path: str):
     return f"data:{mime_type};base64,{encoded}"
 
 
-def render_chat_tab(chat_ready: bool, chat_upload_dir: Path, supports_image_input: bool, supports_thinking: bool):
-    st.title("🤖 智能文档问答 Agent")
-    st.caption("基于 OpenAI SDK + Qwen 兼容接口实现 | 支持 RAG、Tool Use、多轮对话")
+def render_chat_tab(chat_ready: bool, chat_upload_dir: Path, supports_image_input: bool, supports_thinking: bool, has_amap_api_key: bool):
+    st.title("🤖 LabChat Agent")
+    st.caption("基于 OpenAI SDK + LLM provider 兼容接口实现 | 支持 RAG、Tool Use、多轮对话")
     if not chat_ready:
         st.info("💡 请先在侧边栏配置 API Key 并点击 Apply 初始化，即可开始对话。")
+    if not has_amap_api_key:
+        st.warning("未检测到环境变量 AMAP_MAPS_API_KEY，天气工具暂不可用。请先在系统环境变量中配置后重启应用。")
     if "uploader_key" not in st.session_state:
         st.session_state.uploader_key = 0
     

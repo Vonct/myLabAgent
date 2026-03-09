@@ -1,0 +1,13 @@
+{
+  "id": "metaware",
+  "name": "MetaWare",
+  "logo": "media/sysnosys_logo.png",
+  "summary": "用于嵌入式AI开发。",
+  "licenses": [
+    {
+      "license_name": "MetaWare Compiler",
+      "expired_date": "2026-6-1",
+      "owner": "TongjiInfineonLab"
+    }
+  ]
+}

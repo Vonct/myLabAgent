@@ -8,6 +8,7 @@ from agent_core import DocumentAgent
 from io import BytesIO
 from ui_tabs.chat_tab import render_chat_tab
 from ui_tabs.projects_tab import render_projects_tab
+from ui_tabs.licenses_tab import render_licenses_tab
 
 VIP_CONFIG_PATH = os.path.join(os.path.dirname(__file__), "vip_config.json")
 SUPPORTED_LLM_MODELS = ["qwen3.5-plus","MiniMax-M2.5"]
@@ -30,6 +31,9 @@ PRESET_EMBEDDING_BASE_URLS = {
 PROJECT_CATALOG_DIR = Path(__file__).resolve().parent / "project_catalog"
 PROJECTS_DIR = PROJECT_CATALOG_DIR / "projects"
 PROJECT_INDEX_FILE = PROJECT_CATALOG_DIR / "index.json"
+LICENSE_CATALOG_DIR = Path(__file__).resolve().parent / "license_catalog"
+LICENSES_DIR = LICENSE_CATALOG_DIR / "licenses"
+LICENSE_INDEX_FILE = LICENSE_CATALOG_DIR / "index.json"
 CHAT_UPLOAD_DIR = Path(__file__).resolve().parent / "uploads" / "chat_images"
 
 
@@ -521,14 +525,18 @@ with st.sidebar:
             st.session_state.rag_engine.clear_db()
             st.success("知识库已重置。")
 
-tab_projects, tab_chat = st.tabs(["🧪 项目介绍", "🤖 文档问答"])
+tab_projects, tab_licenses, tab_chat = st.tabs(["🧪 项目介绍", "🃏 License 看板", "🤖 LabAgent"])
 chat_ready = bool(effective_llm_api_key and st.session_state.agent)
+has_amap_api_key = bool(os.environ.get("AMAP_MAPS_API_KEY", "").strip())
 with tab_projects:
     render_projects_tab(PROJECT_CATALOG_DIR, PROJECT_INDEX_FILE, PROJECTS_DIR)
+with tab_licenses:
+    render_licenses_tab(LICENSE_CATALOG_DIR, LICENSE_INDEX_FILE, LICENSES_DIR)
 with tab_chat:
     render_chat_tab(
         chat_ready,
         CHAT_UPLOAD_DIR,
         supports_image_input=selected_llm_capabilities["supports_image_input"],
         supports_thinking=selected_llm_capabilities["supports_thinking"],
+        has_amap_api_key=has_amap_api_key,
     )

@@ -6,3 +6,4 @@ tiktoken
 torch
 torchvision
 pillow
+mcp

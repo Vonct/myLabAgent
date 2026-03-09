@@ -1,0 +1,18 @@
+{
+  "id": "matlab",
+  "name": "MATLAB",
+  "logo": "media/matlab.png",
+  "summary": "用于控制算法验证与数据处理。",
+  "licenses": [
+    {
+      "license_name": "Campus Named User",
+      "expired_date": "2026-12-31",
+      "owner": "电机实验室"
+    },
+    {
+      "license_name": "Simulink Add-on",
+      "expired_date": "2026-08-15",
+      "owner": "电机实验室"
+    }
+  ]
+}

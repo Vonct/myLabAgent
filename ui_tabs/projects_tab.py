@@ -1,3 +1,5 @@
+import base64
+import html
 import json
 import re
 from pathlib import Path
@@ -70,6 +72,36 @@ def render_markdown_with_local_images(md_path: Path, project_catalog_dir: Path):
         st.markdown("\n".join(buffer))
 
 
+@st.cache_data(show_spinner=False)
+def _read_image_base64(image_path: str):
+    path = Path(image_path)
+    if not path.exists():
+        return None
+    ext_to_mime = {
+        ".png": "image/png",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".webp": "image/webp",
+        ".gif": "image/gif",
+    }
+    mime = ext_to_mime.get(path.suffix.lower())
+    if not mime:
+        return None
+    data = base64.b64encode(path.read_bytes()).decode("utf-8")
+    return f"data:{mime};base64,{data}"
+
+
+def _render_cover_image(cover_path: Path):
+    data_uri = _read_image_base64(str(cover_path))
+    if data_uri:
+        st.markdown(
+            f'<div class="project-cover"><img src="{data_uri}" alt="project cover"></div>',
+            unsafe_allow_html=True,
+        )
+        return
+    st.markdown('<div class="project-cover project-cover-fallback">暂无封面</div>', unsafe_allow_html=True)
+
+
 def render_projects_tab(project_catalog_dir: Path, project_index_file: Path, projects_dir: Path):
     col1, col2 = st.columns([5, 1])
     with col1:
@@ -83,17 +115,35 @@ def render_projects_tab(project_catalog_dir: Path, project_index_file: Path, pro
     if not projects:
         st.info("未找到项目目录数据。请先执行离线解析脚本生成 project_catalog。")
         return
+    st.markdown(
+        """
+<style>
+.project-title{font-size:1.1rem;font-weight:700;line-height:1.35;min-height:2.6em;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden}
+.project-cover{width:100%;height:160px;border-radius:12px;overflow:hidden;background:#f3f5f7;display:flex;align-items:center;justify-content:center}
+.project-cover img{width:100%;height:100%;object-fit:contain;background:#f3f5f7}
+.project-cover-fallback{color:#7a7a7a;font-size:.9rem}
+.project-summary{line-height:1.5;min-height:3.2em;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden}
+</style>
+        """,
+        unsafe_allow_html=True,
+    )
     cols = st.columns(2)
     for i, project in enumerate(projects):
         with cols[i % 2]:
             with st.container(border=True):
-                st.subheader(project["title"])
+                safe_title = html.escape(project["title"])
+                st.markdown(f'<div class="project-title">{safe_title}</div>', unsafe_allow_html=True)
                 cover = project.get("cover_image")
                 if cover:
                     cover_path = project_catalog_dir / cover
                     if cover_path.exists():
-                        st.image(str(cover_path), width="stretch")
-                st.write(project["summary"])
+                        _render_cover_image(cover_path)
+                    else:
+                        st.markdown('<div class="project-cover project-cover-fallback">暂无封面</div>', unsafe_allow_html=True)
+                else:
+                    st.markdown('<div class="project-cover project-cover-fallback">暂无封面</div>', unsafe_allow_html=True)
+                safe_summary = html.escape(project["summary"])
+                st.markdown(f'<div class="project-summary">{safe_summary}</div>', unsafe_allow_html=True)
                 st.caption(f"分类：{project.get('category', '未分类')}")
                 keyword_text = " / ".join(project["keywords"]) if project["keywords"] else "暂无关键词"
                 st.caption(f"关键词：{keyword_text}")

@@ -1,10 +1,12 @@
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
 from typing import List, Dict, Any, Generator
 from openai import OpenAI
 from rag_engine import RAGEngine
+from amap_mcp_adapter import AMapMCPAdapter, DEFAULT_AMAP_MCP_COMMAND
 
 class DocumentAgent:
     """
@@ -20,9 +22,15 @@ class DocumentAgent:
         self.client = OpenAI(api_key=api_key, base_url=base_url)
         self.llm_model = llm_model
         self.rag = rag_engine
+        self.weather_adapter = AMapMCPAdapter(
+            mode=os.environ.get("AMAP_MCP_MODE", "mcp"),
+            mcp_command=os.environ.get("AMAP_MCP_COMMAND", DEFAULT_AMAP_MCP_COMMAND),
+            mcp_tool_name=os.environ.get("AMAP_MCP_TOOL_NAME", "maps_weather"),
+        )
         self.system_prompt = """你是一个在电机控制与监测以及嵌入式系统开发领域的专业助手。
         - 如果用户问的问题需要根据文档回答，请务必使用 `retrieve_document` 工具检索相关信息。
         - 如果用户请求识别图片里的手写数字，请务必使用 `recognize_handwritten_digit` 工具完成推理，不要凭空猜测结果。
+        - 如果用户询问天气信息，请优先使用 `get_amap_weather` 工具查询，不要凭空编造天气。
         - 如果用户只是打招呼或闲聊，可以直接回答。
         - 回答时请引用检索到的内容，并说明来源（如果有）。
         - 始终保持友好、专业。
@@ -77,6 +85,23 @@ class DocumentAgent:
                             }
                         },
                         "required": ["image_path"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_amap_weather",
+                    "description": "根据城市名称查询实时天气。",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "city": {
+                                "type": "string",
+                                "description": "城市名称，如上海、北京。"
+                            }
+                        },
+                        "required": ["city"]
                     }
                 }
             }
@@ -289,6 +314,25 @@ class DocumentAgent:
                             "role": "tool",
                             "name": func_name,
                             "content": infer_content
+                        })
+                    elif func_name == "get_amap_weather":
+                        city = str(args.get("city", "")).strip()
+                        yield {"type": "tool_exec", "tool": "高德天气查询", "input": city}
+                        try:
+                            weather_result = self.weather_adapter.get_weather(city)
+                            weather_content = json.dumps(weather_result, ensure_ascii=False)
+                        except Exception as e:
+                            weather_content = json.dumps(
+                                {"error": f"天气工具调用失败: {str(e)}"},
+                                ensure_ascii=False
+                            )
+
+                        yield {"type": "tool_result", "output": weather_content}
+                        full_messages.append({
+                            "tool_call_id": tool_call.id,
+                            "role": "tool",
+                            "name": func_name,
+                            "content": weather_content
                         })
                     else:
                         error_content = f"未注册的工具: {func_name}"
