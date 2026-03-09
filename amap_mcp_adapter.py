@@ -2,7 +2,7 @@ import asyncio
 import json
 import os
 import shlex
-from typing import Any, Dict, List
+from typing import Any
 
 try:
     from mcp import ClientSession, StdioServerParameters
@@ -41,7 +41,7 @@ class AMapMCPAdapter:
             env=os.environ.copy(),
         )
 
-    async def _list_tools_from_mcp(self) -> List[Dict[str, Any]]:
+    async def _list_tools_from_mcp(self) -> list[dict[str, Any]]:
         server_params = self._build_server_params()
         async with stdio_client(server_params) as (read_stream, write_stream):
             async with ClientSession(read_stream, write_stream) as session:
@@ -58,14 +58,14 @@ class AMapMCPAdapter:
             )
         return tools
 
-    async def _get_weather_from_mcp(self, city: str) -> Dict[str, Any]:
+    async def _get_weather_from_mcp(self, city: str) -> dict[str, Any]:
         server_params = self._build_server_params()
         async with stdio_client(server_params) as (read_stream, write_stream):
             async with ClientSession(read_stream, write_stream) as session:
                 await session.initialize()
                 result = await session.call_tool(self.mcp_tool_name, {"city": city})
 
-        texts: List[str] = []
+        texts: list[str] = []
         for item in getattr(result, "content", []) or []:
             text = getattr(item, "text", None)
             if text is not None:
@@ -83,7 +83,7 @@ class AMapMCPAdapter:
                 return {"text": merged_text, "source": "amap_mcp"}
         return {"content": str(getattr(result, "content", "")), "source": "amap_mcp"}
 
-    def get_weather(self, city: str) -> Dict[str, Any]:
+    def get_weather(self, city: str) -> dict[str, Any]:
         if self.mode == "mock":
             return {
                 "city": city,
@@ -95,5 +95,5 @@ class AMapMCPAdapter:
             }
         return asyncio.run(self._get_weather_from_mcp(city))
 
-    def list_tools(self) -> List[Dict[str, Any]]:
+    def list_tools(self) -> list[dict[str, Any]]:
         return asyncio.run(self._list_tools_from_mcp())

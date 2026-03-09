@@ -105,15 +105,15 @@ def _render_cover_image(cover_path: Path):
 def render_projects_tab(project_catalog_dir: Path, project_index_file: Path, projects_dir: Path):
     col1, col2 = st.columns([5, 1])
     with col1:
-        st.title("🧪 项目介绍")
+        st.title("项目介绍")
     with col2:
-        if st.button("🔄 刷新", key="refresh_projects"):
+        if st.button("刷新", key="refresh_projects"):
             load_projects.clear()
             st.rerun()
-    st.caption("项目数据来自后端持久化目录，点击卡片查看详情。")
+    st.caption("项目数据来自持久化目录，点击卡片可查看详情。")
     projects = load_projects(project_index_file, projects_dir)
     if not projects:
-        st.info("未找到项目目录数据。请先执行离线解析脚本生成 project_catalog。")
+        st.info("未找到项目目录数据，请先生成 project_catalog。")
         return
     st.markdown(
         """
@@ -155,7 +155,7 @@ def render_projects_tab(project_catalog_dir: Path, project_index_file: Path, pro
     if not selected:
         return
     st.markdown("---")
-    st.subheader(f"📘 {selected['title']}")
+    st.subheader(selected["title"])
     md_path = get_project_markdown_path(selected, project_catalog_dir)
     if md_path:
         render_markdown_with_local_images(md_path, project_catalog_dir)

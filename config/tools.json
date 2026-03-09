@@ -1,0 +1,57 @@
+{
+  "retrieve_document": {
+    "description": "从知识库中检索与用户问题相关的文档片段。",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string",
+          "description": "用于检索的关键词或问题。"
+        }
+      },
+      "required": ["query"]
+    }
+  },
+  "recognize_handwritten_digit": {
+    "description": "对单张图片执行手写数字识别，返回 digit、confidence 和 probs。",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "image_path": {
+          "type": "string",
+          "description": "待识别图片路径，可以是绝对路径或相对项目目录的路径。"
+        },
+        "invert": {
+          "type": "boolean",
+          "description": "是否反色预处理，默认 false。"
+        },
+        "normalize": {
+          "type": "boolean",
+          "description": "是否使用 MNIST 归一化，默认 true。"
+        },
+        "device": {
+          "type": "string",
+          "description": "推理设备，支持 auto、cpu、cuda。"
+        },
+        "model_path": {
+          "type": "string",
+          "description": "可选模型路径，不传则使用默认 best_model 权重。"
+        }
+      },
+      "required": ["image_path"]
+    }
+  },
+  "get_amap_weather": {
+    "description": "根据城市名称查询实时天气。",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "city": {
+          "type": "string",
+          "description": "城市名称，例如上海、北京。"
+        }
+      },
+      "required": ["city"]
+    }
+  }
+}

@@ -1,9 +1,10 @@
+import json
+import math
+import os
+from io import BytesIO
+
 from openai import OpenAI
 from pypdf import PdfReader
-from io import BytesIO
-import json
-import os
-import math
 
 
 class QwenEmbeddingFunction:
@@ -33,15 +34,13 @@ class QwenEmbeddingFunction:
         usage_sum = {"input_tokens": 0, "total_tokens": 0}
         for i in range(0, len(texts), batch_size):
             batch = texts[i:i + batch_size]
-            response = self.client.embeddings.create(
-                model=self.model_name,
-                input=batch
-            )
+            response = self.client.embeddings.create(model=self.model_name, input=batch)
             vectors.extend([item.embedding for item in response.data])
             usage = self._parse_usage(getattr(response, "usage", None))
             usage_sum["input_tokens"] += usage["input_tokens"]
             usage_sum["total_tokens"] += usage["total_tokens"]
         return vectors, usage_sum
+
 
 class RAGEngine:
     def __init__(self, api_key: str, base_url: str, embedding_model: str = "text-embedding-v4"):
@@ -51,7 +50,7 @@ class RAGEngine:
         self.embedding_function = QwenEmbeddingFunction(
             api_key=self.api_key,
             base_url=self.base_url,
-            model_name=self.embedding_model
+            model_name=self.embedding_model,
         )
         self.backend = "memory"
         self.records_file = "./vector_store.json"
@@ -60,16 +59,17 @@ class RAGEngine:
         self.last_embedding_usage = {"input_tokens": 0, "total_tokens": 0}
         try:
             import chromadb
+
             self.client = chromadb.PersistentClient(path="./chroma_db")
             try:
                 self.collection = self.client.get_collection(
                     name="docs",
-                    embedding_function=self.embedding_function
+                    embedding_function=self.embedding_function,
                 )
             except Exception:
                 self.collection = self.client.create_collection(
                     name="docs",
-                    embedding_function=self.embedding_function
+                    embedding_function=self.embedding_function,
                 )
             self.backend = "chroma"
         except Exception:
@@ -79,28 +79,22 @@ class RAGEngine:
                     self.records = json.loads(content) if content else []
 
     def process_file(self, file_content: BytesIO, filename: str) -> str:
-        """
-        处理上传的文件：读取 -> 分块 -> 向量化 -> 存储
-        返回：处理结果信息
-        """
         try:
-            # 1. 文本提取
             reader = PdfReader(file_content)
             text = ""
             for page in reader.pages:
-                text += page.extract_text() + "\n"
-            
-            if not text.strip():
-                return f"⚠️ 文件 {filename} 内容为空或无法解析。"
+                extracted = page.extract_text() or ""
+                text += extracted + "\n"
 
-            # 2. 文本分块 (简单的按字符数切分，重叠部分用于保持上下文)
+            if not text.strip():
+                return f"文件 {filename} 内容为空或无法解析。"
+
             chunk_size = 1000
             overlap = 100
             chunks = []
             for i in range(0, len(text), chunk_size - overlap):
                 chunks.append(text[i:i + chunk_size])
 
-            # 3. 生成 ID 和元数据
             ids = [f"{filename}_{i}" for i in range(len(chunks))]
             metadatas = [{"source": filename, "chunk_index": i} for i in range(len(chunks))]
 
@@ -109,49 +103,45 @@ class RAGEngine:
                 self.last_embedding_usage = usage
                 self.embedding_usage_total["input_tokens"] += usage["input_tokens"]
                 self.embedding_usage_total["total_tokens"] += usage["total_tokens"]
-                self.collection.add(
-                    documents=chunks,
-                    ids=ids,
-                    metadatas=metadatas
-                )
+                self.collection.add(documents=chunks, ids=ids, metadatas=metadatas)
             else:
                 vectors, usage = self.embedding_function.embed_with_usage(chunks)
                 self.last_embedding_usage = usage
                 self.embedding_usage_total["input_tokens"] += usage["input_tokens"]
                 self.embedding_usage_total["total_tokens"] += usage["total_tokens"]
                 for i, chunk in enumerate(chunks):
-                    self.records.append({
-                        "id": ids[i],
-                        "document": chunk,
-                        "metadata": metadatas[i],
-                        "embedding": vectors[i]
-                    })
+                    self.records.append(
+                        {
+                            "id": ids[i],
+                            "document": chunk,
+                            "metadata": metadatas[i],
+                            "embedding": vectors[i],
+                        }
+                    )
                 with open(self.records_file, "w", encoding="utf-8") as f:
                     json.dump(self.records, f, ensure_ascii=False)
-            
+
             return (
-                f"✅ 成功处理文件: {filename}，生成 {len(chunks)} 个文本块并完成向量化。"
-                f"（本次Embedding Tokens: 输入 {self.last_embedding_usage['input_tokens']}，总计 {self.last_embedding_usage['total_tokens']}）"
+                f"成功处理文件：{filename}，共生成 {len(chunks)} 个文本块并完成向量化。"
+                f"（本次 Embedding Tokens：输入 {self.last_embedding_usage['input_tokens']}，总计 {self.last_embedding_usage['total_tokens']}）"
             )
-        
         except Exception as e:
-            return f"❌ 处理文件 {filename} 时发生错误: {str(e)}"
+            return f"处理文件 {filename} 时发生错误：{e}"
 
     def retrieve(self, query: str, n_results: int = 3) -> list:
         if self.backend == "chroma":
-            results = self.collection.query(
-                query_texts=[query],
-                n_results=n_results
-            )
+            results = self.collection.query(query_texts=[query], n_results=n_results)
             retrieved_docs = []
             if results["documents"]:
                 for i, doc in enumerate(results["documents"][0]):
                     meta = results["metadatas"][0][i]
-                    retrieved_docs.append({
-                        "content": doc,
-                        "source": meta.get("source", "unknown"),
-                        "score": results["distances"][0][i] if "distances" in results else 0
-                    })
+                    retrieved_docs.append(
+                        {
+                            "content": doc,
+                            "source": meta.get("source", "unknown"),
+                            "score": results["distances"][0][i] if "distances" in results else 0,
+                        }
+                    )
             return retrieved_docs
         if not self.records:
             return []
@@ -169,7 +159,7 @@ class RAGEngine:
             {
                 "content": it["document"],
                 "source": it["metadata"].get("source", "unknown"),
-                "score": score
+                "score": score,
             }
             for score, it in top
         ]
@@ -180,7 +170,7 @@ class RAGEngine:
                 self.client.delete_collection("docs")
                 self.collection = self.client.create_collection(
                     name="docs",
-                    embedding_function=self.embedding_function
+                    embedding_function=self.embedding_function,
                 )
             else:
                 self.records = []
@@ -188,12 +178,12 @@ class RAGEngine:
                     f.write("[]")
             self.last_embedding_usage = {"input_tokens": 0, "total_tokens": 0}
             self.embedding_usage_total = {"input_tokens": 0, "total_tokens": 0}
-            return "数据库已清空。"
+            return "知识库已清空。"
         except Exception as e:
-            return f"清空数据库失败: {str(e)}"
+            return f"清空知识库失败：{e}"
 
     def get_embedding_usage(self):
         return {
             "last": self.last_embedding_usage,
-            "total": self.embedding_usage_total
+            "total": self.embedding_usage_total,
         }

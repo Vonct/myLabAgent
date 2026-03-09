@@ -1,5 +1,5 @@
 import json
-from datetime import datetime, date
+from datetime import date, datetime
 from pathlib import Path
 
 import streamlit as st
@@ -73,12 +73,12 @@ def render_status_badge(status_tuple):
 def render_licenses_tab(catalog_dir: Path, index_file: Path, licenses_dir: Path):
     col_title, col_action = st.columns([5, 1])
     with col_title:
-        st.title("🃏 License 看板")
+        st.title("License 看板")
     with col_action:
-        if st.button("🔄 刷新", key="refresh_licenses"):
+        if st.button("刷新", key="refresh_licenses"):
             load_software_licenses.clear()
             st.rerun()
-    st.caption("卡片显示软件 License 与到期时间，右上角指示灯代表当前可用状态。")
+    st.caption("卡片显示软件 License 与到期时间，右上角状态灯表示当前可用性。")
     softwares = load_software_licenses(index_file, licenses_dir)
     if not softwares:
         st.info("未找到 License 目录数据，请先完善 license_catalog。")
@@ -103,7 +103,6 @@ def render_licenses_tab(catalog_dir: Path, index_file: Path, licenses_dir: Path)
                     if logo_path and logo_path.exists():
                         st.image(str(logo_path), width=120)
                     else:
-                        st.markdown("### 🧩")
                         st.caption("待补充图标")
                 with body_right:
                     summary = software.get("summary")
