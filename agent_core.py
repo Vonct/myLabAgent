@@ -255,6 +255,7 @@ class LabAgent:
 
                 for tool_call in initial_msg.tool_calls:
                     func_name = tool_call.function.name
+                    print('Calling: ', func_name)
                     args = json.loads(tool_call.function.arguments)
                     yield {'type': 'tool_exec', 'tool': func_name, 'input': json.dumps(args, ensure_ascii=False)}
                     tool_output = self.tool_registry.execute(func_name, args) if self.tool_registry else json.dumps({'error': 'Tool registry unavailable'}, ensure_ascii=False)

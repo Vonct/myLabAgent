@@ -82,6 +82,7 @@ class AMapMCPAdapter:
                 result = await session.call_tool(self.mcp_tool_name, {"city": city})
 
         texts: List[str] = []
+        print('res:', result)
         for item in getattr(result, "content", []) or []:
             text = getattr(item, "text", None)
             if text is not None:
