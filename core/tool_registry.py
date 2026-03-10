@@ -7,7 +7,6 @@ from typing import Any, Callable
 
 from core.permissions import PermissionLevel, PermissionManager
 
-
 ToolExecutor = Callable[[dict[str, Any]], str]
 
 
@@ -28,19 +27,42 @@ class ToolRegistry:
         self._tools: dict[str, RegisteredTool] = {}
 
     def _load_definitions(self, path: Path) -> dict[str, Any]:
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, 'r', encoding='utf-8-sig') as f:
             return json.load(f)
 
-    def register(self, name: str, executor: ToolExecutor, permission: PermissionLevel) -> None:
+    def register(
+        self,
+        name: str,
+        executor: ToolExecutor,
+        permission: PermissionLevel,
+        *,
+        description_override: str | None = None,
+    ) -> None:
         definition = self._definitions.get(name)
+        '''
+        definition = {
+            "description": "从知识库中检索与用户问题相关的文档片段。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "用于检索的关键词或问题。"
+                }
+                },
+                "required": ["query"]
+            }
+        }
+        '''
         if not definition:
-            raise KeyError(f"Tool definition not found for `{name}`")
+            raise KeyError(f'Tool definition not found for `{name}`')
+        description = description_override or definition['description']
         function_schema = {
-            "type": "function",
-            "function": {
-                "name": name,
-                "description": definition["description"],
-                "parameters": definition["parameters"],
+            'type': 'function',
+            'function': {
+                'name': name,
+                'description': description,
+                'parameters': definition['parameters'],
             },
         }
         self._tools[name] = RegisteredTool(
@@ -48,7 +70,7 @@ class ToolRegistry:
             schema=function_schema,
             executor=executor,
             permission=permission,
-            description=definition["description"],
+            description=description,
         )
 
     def get_openai_schemas(self) -> list[dict[str, Any]]:
@@ -57,11 +79,11 @@ class ToolRegistry:
     def execute(self, name: str, args: dict[str, Any]) -> str:
         tool = self._tools.get(name)
         if tool is None:
-            return json.dumps({"error": f"Unknown tool: {name}"}, ensure_ascii=False)
+            return json.dumps({'error': f'Unknown tool: {name}'}, ensure_ascii=False)
 
         permission = self.permission_manager.check(tool.permission)
         if not permission.allowed:
-            return json.dumps({"error": permission.reason}, ensure_ascii=False)
+            return json.dumps({'error': permission.reason}, ensure_ascii=False)
 
         return tool.executor(args)
 
