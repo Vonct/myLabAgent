@@ -28,9 +28,11 @@ class LabAgent:
         skill_loader: SkillLoader | None = None,
         max_tool_rounds: int = 4,
     ):
-        self.client = OpenAI(api_key=api_key, base_url=base_url)
+        request_timeout = float(os.environ.get('LABCHAT_REQUEST_TIMEOUT', '180'))
+        self.client = OpenAI(api_key=api_key, base_url=base_url, timeout=request_timeout)
         self.llm_model = llm_model
         self.rag = rag_engine
+        self.request_timeout = request_timeout
         self.weather_adapter = AMapMCPAdapter(
             mode=os.environ.get('AMAP_MCP_MODE', 'mcp'),
             mcp_command=os.environ.get('AMAP_MCP_COMMAND', DEFAULT_AMAP_MCP_COMMAND),
@@ -167,8 +169,16 @@ class LabAgent:
         query = str(args.get('query', '')).strip()
         docs = self.rag.retrieve(query)
         if not docs:
-            return '未检索到相关文档片段。'
-        return '\n\n'.join([f"[来源: {d['source']}]\n{d['content']}" for d in docs])
+            return '???????????'
+        max_docs = max(1, int(os.environ.get('RAG_MAX_RETURN_DOCS', '2')))
+        max_chars_per_doc = max(200, int(os.environ.get('RAG_MAX_DOC_CHARS', '1200')))
+        rendered_docs = []
+        for doc in docs[:max_docs]:
+            content = doc['content']
+            if len(content) > max_chars_per_doc:
+                content = content[:max_chars_per_doc].rstrip() + '...'
+            rendered_docs.append(f"[??: {doc['source']}]\n{content}")
+        return '\n\n'.join(rendered_docs)
 
     def _run_digit_inference(self, args: dict[str, Any]) -> str:
         image_path = args.get('image_path')
@@ -318,5 +328,12 @@ class LabAgent:
             for i in range(0, len(answer), 40):
                 yield {'type': 'answer_chunk', 'content': answer[i:i + 40]}
         except Exception as e:
-            yield {'type': 'error', 'content': str(e)}
+            if 'timed out' in str(e).lower():
+                message = (
+                    f'LLM request timed out (timeout={int(self.request_timeout)}s). '
+                    'Retry later or narrow the question.'
+                )
+            else:
+                message = str(e)
+            yield {'type': 'error', 'content': message}
 

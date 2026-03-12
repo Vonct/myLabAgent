@@ -6,7 +6,10 @@ venv/
 env/
 .env
 chroma_db/
+chroma_db_fresh/
 uploads/
 vip_config.json
 .trae/
 app_data/sessions/
+app_data/rag_engine.log
+vector_store.json

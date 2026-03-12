@@ -190,13 +190,17 @@ def render_sidebar(
                     for uploaded_file in uploaded_files:
                         file_bytes = BytesIO(uploaded_file.read())
                         result = st.session_state.rag_engine.process_file(file_bytes, uploaded_file.name)
-                        st.success(result)
+                        if result.startswith("[ERROR]"):
+                            st.error(result)
+                        else:
+                            st.success(result)
 
         st.markdown("---")
         if st.session_state.rag_engine:
             usage = st.session_state.rag_engine.get_embedding_usage()
             backend = getattr(st.session_state.rag_engine, "backend", "unknown")
             backend_init_error = getattr(st.session_state.rag_engine, "backend_init_error", "")
+            backend_runtime_error = getattr(st.session_state.rag_engine, "backend_runtime_error", "")
             st.subheader("Embedding Token 统计")
             st.caption(
                 f"本次上传：输入 {usage['last']['input_tokens']}，总计 {usage['last']['total_tokens']} | "
@@ -205,6 +209,9 @@ def render_sidebar(
             st.caption(f"RAG backend: {backend}")
             if backend == "memory" and backend_init_error:
                 st.caption(f"RAG init fallback: {backend_init_error}")
+            if backend_runtime_error:
+                st.caption(f"RAG runtime fallback: {backend_runtime_error}")
+            st.caption(f"RAG log: {project_root / 'app_data' / 'rag_engine.log'}")
             st.caption(f"会话 ID：{st.session_state.session_id}")
             if st.session_state.task_id:
                 st.caption(f"最近任务 ID：{st.session_state.task_id}")
