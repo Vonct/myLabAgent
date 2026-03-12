@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 import os
@@ -26,6 +26,7 @@ class LabAgent:
         tool_registry: ToolRegistry | None = None,
         system_prompt: str = '',
         skill_loader: SkillLoader | None = None,
+        max_tool_rounds: int = 4,
     ):
         self.client = OpenAI(api_key=api_key, base_url=base_url)
         self.llm_model = llm_model
@@ -38,6 +39,7 @@ class LabAgent:
         self.system_prompt = system_prompt.replace('当前 LLM 模型名称', self.llm_model)
         self.tool_registry = tool_registry
         self.skill_loader = skill_loader
+        self.max_tool_rounds = max(1, int(max_tool_rounds))
         if self.tool_registry is not None:
             self.tool_registry.register('retrieve_document', self._run_retrieve_document, PermissionLevel.READ_ONLY)
             self.tool_registry.register('recognize_handwritten_digit', self._run_digit_inference, PermissionLevel.EXEC)
@@ -49,6 +51,16 @@ class LabAgent:
                 description_override=self.skill_loader.build_tool_description() if self.skill_loader else None,
             )
         self.tools = self.tool_registry.get_openai_schemas() if self.tool_registry else []
+
+    def _create_completion(self, messages: list[dict[str, Any]], extra_params: dict[str, Any]):
+        return self.client.chat.completions.create(
+            model=self.llm_model,
+            messages=messages,
+            tools=self.tools,
+            tool_choice='auto',
+            stream=False,
+            **extra_params,
+        )
 
     def _parse_usage(self, usage: Any) -> dict[str, int]:
         if usage is None:
@@ -234,31 +246,34 @@ class LabAgent:
         full_messages = [{'role': 'system', 'content': self.system_prompt}] + self._prepare_messages_for_api(messages)
 
         try:
-            extra_params = {}
+            extra_params: dict[str, Any] = {}
             if reasoning_mode and supports_thinking:
                 extra_params['extra_body'] = {'enable_thinking': True}
 
-            response = self.client.chat.completions.create(
-                model=self.llm_model,
-                messages=full_messages,
-                tools=self.tools,
-                tool_choice='auto',
-                stream=False,
-                **extra_params,
-            )
-            first_usage = self._parse_usage(getattr(response, 'usage', None))
-            initial_msg = response.choices[0].message
+            response = self._create_completion(full_messages, extra_params) # API CALL
+            total_usage = self._parse_usage(getattr(response, 'usage', None))
+            current_msg = response.choices[0].message
+            tool_round = 0
 
-            if initial_msg.tool_calls:
-                yield {'type': 'thought', 'content': '正在分析问题并准备调用工具...'}
-                full_messages.append(initial_msg)
+            while current_msg.tool_calls and tool_round < self.max_tool_rounds:
+                tool_round += 1
+                if tool_round == 1:
+                    thought = '正在分析问题并准备调用工具...'
+                else:
+                    thought = f'正在继续执行第 {tool_round} 轮工具调用...'
+                yield {'type': 'thought', 'content': thought}
 
-                for tool_call in initial_msg.tool_calls:
+                full_messages.append(current_msg)
+
+                for tool_call in current_msg.tool_calls:
                     func_name = tool_call.function.name
-                    print('Calling: ', func_name)
                     args = json.loads(tool_call.function.arguments)
                     yield {'type': 'tool_exec', 'tool': func_name, 'input': json.dumps(args, ensure_ascii=False)}
-                    tool_output = self.tool_registry.execute(func_name, args) if self.tool_registry else json.dumps({'error': 'Tool registry unavailable'}, ensure_ascii=False)
+                    tool_output = (
+                        self.tool_registry.execute(func_name, args)
+                        if self.tool_registry
+                        else json.dumps({'error': 'Tool registry unavailable'}, ensure_ascii=False)
+                    )
                     yield {'type': 'tool_result', 'output': tool_output}
                     if session_store and session_id and task_id:
                         session_store.append_tool_event(
@@ -267,6 +282,7 @@ class LabAgent:
                             {
                                 'tool': func_name,
                                 'args': args,
+                                'tool_round': tool_round,
                                 'output_preview': tool_output[:400],
                             },
                         )
@@ -279,32 +295,28 @@ class LabAgent:
                         }
                     )
 
-                final_response = self.client.chat.completions.create(
-                    model=self.llm_model,
-                    messages=full_messages,
-                    stream=False,
-                    **extra_params,
+                response = self._create_completion(full_messages, extra_params)
+                total_usage = self._merge_usage(total_usage, self._parse_usage(getattr(response, 'usage', None)))
+                current_msg = response.choices[0].message
+
+            final_text, final_reasoning = self._extract_text(current_msg)
+
+            if current_msg.tool_calls and tool_round >= self.max_tool_rounds:
+                full_messages.append(current_msg)
+                limit_note = (
+                    f'已达到当前代理的最大工具轮数限制（{self.max_tool_rounds} 轮）。'
+                    ' 如果任务仍未完成，请继续细化提示，或提高工具轮数上限。'
                 )
-                second_usage = self._parse_usage(getattr(final_response, 'usage', None))
-                total_usage = self._merge_usage(first_usage, second_usage)
-                final_text, final_reasoning = self._extract_text(final_response.choices[0].message)
+                final_text = f'{limit_note}\n\n{final_text}'.strip()
 
-                if final_reasoning:
-                    yield {'type': 'reasoning', 'content': final_reasoning}
+            if final_reasoning:
+                yield {'type': 'reasoning', 'content': final_reasoning}
 
-                if not final_text:
-                    final_text = '模型本轮没有返回可见文本，请重试或切换模型。'
-                answer = final_text + self._usage_suffix(total_usage)
-                for i in range(0, len(answer), 40):
-                    yield {'type': 'answer_chunk', 'content': answer[i:i + 40]}
-            else:
-                initial_text, reasoning = self._extract_text(initial_msg)
-                if reasoning:
-                    yield {'type': 'reasoning', 'content': reasoning}
-                if not initial_text:
-                    initial_text = '模型本轮没有返回可见文本，请重试或切换模型。'
-                content = initial_text + self._usage_suffix(first_usage)
-                for i in range(0, len(content), 40):
-                    yield {'type': 'answer_chunk', 'content': content[i:i + 40]}
+            if not final_text:
+                final_text = '模型本轮没有返回可见文本，请重试或切换模型。'
+            answer = final_text + self._usage_suffix(total_usage)
+            for i in range(0, len(answer), 40):
+                yield {'type': 'answer_chunk', 'content': answer[i:i + 40]}
         except Exception as e:
             yield {'type': 'error', 'content': str(e)}
+

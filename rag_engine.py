@@ -53,6 +53,7 @@ class RAGEngine:
             model_name=self.embedding_model,
         )
         self.backend = "memory"
+        self.backend_init_error = ""
         self.records_file = "./vector_store.json"
         self.records = []
         self.embedding_usage_total = {"input_tokens": 0, "total_tokens": 0}
@@ -61,18 +62,10 @@ class RAGEngine:
             import chromadb
 
             self.client = chromadb.PersistentClient(path="./chroma_db")
-            try:
-                self.collection = self.client.get_collection(
-                    name="docs",
-                    embedding_function=self.embedding_function,
-                )
-            except Exception:
-                self.collection = self.client.create_collection(
-                    name="docs",
-                    embedding_function=self.embedding_function,
-                )
+            self.collection = self.client.get_or_create_collection(name="docs")
             self.backend = "chroma"
-        except Exception:
+        except Exception as exc:
+            self.backend_init_error = repr(exc)
             if os.path.exists(self.records_file):
                 with open(self.records_file, "r", encoding="utf-8") as f:
                     content = f.read().strip()
@@ -99,11 +92,11 @@ class RAGEngine:
             metadatas = [{"source": filename, "chunk_index": i} for i in range(len(chunks))]
 
             if self.backend == "chroma":
-                _, usage = self.embedding_function.embed_with_usage(chunks)
+                vectors, usage = self.embedding_function.embed_with_usage(chunks)
                 self.last_embedding_usage = usage
                 self.embedding_usage_total["input_tokens"] += usage["input_tokens"]
                 self.embedding_usage_total["total_tokens"] += usage["total_tokens"]
-                self.collection.add(documents=chunks, ids=ids, metadatas=metadatas)
+                self.collection.upsert(documents=chunks, ids=ids, metadatas=metadatas, embeddings=vectors)
             else:
                 vectors, usage = self.embedding_function.embed_with_usage(chunks)
                 self.last_embedding_usage = usage
@@ -130,7 +123,8 @@ class RAGEngine:
 
     def retrieve(self, query: str, n_results: int = 3) -> list:
         if self.backend == "chroma":
-            results = self.collection.query(query_texts=[query], n_results=n_results)
+            query_vector, _ = self.embedding_function.embed_with_usage([query])
+            results = self.collection.query(query_embeddings=query_vector, n_results=n_results)
             retrieved_docs = []
             if results["documents"]:
                 for i, doc in enumerate(results["documents"][0]):
@@ -168,10 +162,7 @@ class RAGEngine:
         try:
             if self.backend == "chroma":
                 self.client.delete_collection("docs")
-                self.collection = self.client.create_collection(
-                    name="docs",
-                    embedding_function=self.embedding_function,
-                )
+                self.collection = self.client.get_or_create_collection(name="docs")
             else:
                 self.records = []
                 with open(self.records_file, "w", encoding="utf-8") as f:

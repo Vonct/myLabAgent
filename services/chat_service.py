@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from pathlib import Path
 
@@ -40,6 +40,7 @@ def build_agent(
         tool_registry=tool_registry,
         system_prompt=prompt,
         skill_loader=skill_loader,
+        max_tool_rounds=4,
     )
     return rag_engine, agent
 

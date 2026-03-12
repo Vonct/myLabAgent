@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from io import BytesIO
 from pathlib import Path
@@ -41,7 +41,12 @@ def render_sidebar(
 
         if auth_mode == "手动输入":
             selected_llm_model = st.selectbox("LLM 模型", options=supported_llm_models, index=0, key="manual_llm_model")
-            selected_embedding_model = st.selectbox("Embedding 模型", options=supported_embedding_models, index=0, key="manual_embedding_model")
+            selected_embedding_model = st.selectbox(
+                "Embedding 模型",
+                options=supported_embedding_models,
+                index=0,
+                key="manual_embedding_model",
+            )
             selected_llm_capabilities = resolve_llm_capabilities(selected_llm_model, model_capabilities)
             effective_llm_base_url = resolve_model_base_url(selected_llm_model, preset_llm_base_urls, default_llm_base_url)
             effective_embedding_base_url = resolve_model_base_url(
@@ -86,10 +91,15 @@ def render_sidebar(
                 )
                 llm_options = list(llm_pool.keys())
                 embedding_options = list(embedding_pool.keys())
+
                 if llm_options:
                     selected_llm_model = st.selectbox("LLM 模型", options=llm_options, index=0, key="vip_llm_model")
                     selected_llm_conf = llm_pool.get(selected_llm_model, {})
-                    selected_llm_capabilities = resolve_llm_capabilities(selected_llm_model, model_capabilities, selected_llm_conf)
+                    selected_llm_capabilities = resolve_llm_capabilities(
+                        selected_llm_model,
+                        model_capabilities,
+                        selected_llm_conf,
+                    )
                     effective_llm_api_key = selected_llm_conf.get("api_key", "")
                     effective_llm_base_url = selected_llm_conf.get("base_url") or resolve_model_base_url(
                         selected_llm_model,
@@ -152,8 +162,8 @@ def render_sidebar(
                 st.session_state.current_runtime_signature = pending_config
                 st.session_state.applied_config = pending_config
                 st.success("配置已生效。")
-            except Exception as e:
-                st.error(f"引擎初始化失败: {e}")
+            except Exception as exc:
+                st.error(f"引擎初始化失败：{exc}")
                 st.stop()
 
         if st.session_state.current_runtime_signature != pending_config:
@@ -185,11 +195,16 @@ def render_sidebar(
         st.markdown("---")
         if st.session_state.rag_engine:
             usage = st.session_state.rag_engine.get_embedding_usage()
+            backend = getattr(st.session_state.rag_engine, "backend", "unknown")
+            backend_init_error = getattr(st.session_state.rag_engine, "backend_init_error", "")
             st.subheader("Embedding Token 统计")
             st.caption(
                 f"本次上传：输入 {usage['last']['input_tokens']}，总计 {usage['last']['total_tokens']} | "
                 f"累计：输入 {usage['total']['input_tokens']}，总计 {usage['total']['total_tokens']}"
             )
+            st.caption(f"RAG backend: {backend}")
+            if backend == "memory" and backend_init_error:
+                st.caption(f"RAG init fallback: {backend_init_error}")
             st.caption(f"会话 ID：{st.session_state.session_id}")
             if st.session_state.task_id:
                 st.caption(f"最近任务 ID：{st.session_state.task_id}")

@@ -150,7 +150,7 @@
    - 直接输出答案
 5. 把回答按 `answer_chunk` 分段 `yield` 给前端
 
-这就是一个简化版 ReAct / tool-calling 闭环。
+这就是一个有上限的多轮 ReAct / tool-calling 闭环。当前默认最多执行 4 轮工具调用。
 
 ### 7.3 前端为什么能显示 thought / tool / result
 
@@ -365,7 +365,7 @@ full_messages = [{"role": "system", "content": self.system_prompt}] + messages
 1. 执行工具函数
 2. 记录 tool event
 3. 将结果作为 `role="tool"` 消息拼回上下文
-4. 再次请求模型生成最终答案
+4. 如果模型还在请求工具，就继续下一轮；否则生成最终答案
 
 ### 11.5 前端展示时
 
@@ -445,3 +445,4 @@ full_messages = [{"role": "system", "content": self.system_prompt}] + messages
 `myLabAgent` 现在是一个以聊天 Agent 为核心、带 RAG、工具调用、轻量 skill 加载、项目展示和 License 展示的 Streamlit 应用。
 
 新增 skill 之后，系统多了一层“先发现可复用 workflow，再按需加载说明”的能力，但真正的执行动作仍然由原有工具系统完成。
+
