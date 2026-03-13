@@ -169,15 +169,15 @@ class LabAgent:
         query = str(args.get('query', '')).strip()
         docs = self.rag.retrieve(query)
         if not docs:
-            return '???????????'
-        max_docs = max(1, int(os.environ.get('RAG_MAX_RETURN_DOCS', '2')))
-        max_chars_per_doc = max(200, int(os.environ.get('RAG_MAX_DOC_CHARS', '1200')))
+            return '未检索到相关文档片段。'
+        max_docs = max(1, int(os.environ.get('RAG_MAX_RETURN_DOCS', '4')))
+        max_chars_per_doc = max(200, int(os.environ.get('RAG_MAX_DOC_CHARS', '1500')))
         rendered_docs = []
         for doc in docs[:max_docs]:
             content = doc['content']
             if len(content) > max_chars_per_doc:
                 content = content[:max_chars_per_doc].rstrip() + '...'
-            rendered_docs.append(f"[??: {doc['source']}]\n{content}")
+            rendered_docs.append(f"[来源: {doc['source']}]\n{content}")
         return '\n\n'.join(rendered_docs)
 
     def _run_digit_inference(self, args: dict[str, Any]) -> str:

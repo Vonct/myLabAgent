@@ -1,160 +1,100 @@
-﻿# myLabAgent 技术交互说明
+﻿# myLabAgent Technical Interaction Guide
 
-这份文档从整体架构、运行链路、工具系统和新增的 skill 机制四个角度说明 `myLabAgent` 当前是怎么工作的。
+这份文档面向长期维护，重点说明 `myLabAgent` 当前的共享运行时、`Web` 交互形态和 `CLI` 交互形态分别是什么、各自依赖哪些模块，以及后续应该把变更放到哪里。
 
 ## 1. 项目一句话说明
 
-`myLabAgent` 是一个基于 `Streamlit + OpenAI SDK 兼容接口` 的实验室 Agent Demo。
+`myLabAgent` 是一个基于 `OpenAI SDK 兼容接口` 的实验室 Agent 项目，当前同时支持：
 
-它当前主要包含三类能力：
+1. `Web` 端交互，基于 `Streamlit`
+2. `CLI` 端交互，基于 `argparse + rich`
 
-1. 聊天问答：支持多轮对话、RAG 检索增强、工具调用。
-2. 项目介绍展示：读取持久化的项目目录数据并展示详情。
-3. License 看板：集中展示软件 License 信息和到期状态。
+这两个入口共享同一套 Agent runtime、RAG、工具注册和会话落盘能力。
 
-## 2. 整体架构
+## 2. 维护原则
 
-可以把项目拆成 5 层：
+后续维护时，优先遵守这条边界：
 
-1. UI 层
+- `共享 runtime` 负责模型调用、工具调用、会话数据、RAG、权限
+- `Web` 只负责 Streamlit UI 和 `st.session_state`
+- `CLI` 只负责命令解析、终端输入输出和 Rich 渲染
+
+一句话说：
+
+`不要把 Web 状态写进共享 runtime，也不要把 CLI 渲染逻辑写进 Agent core。`
+
+## 3. 当前整体结构
+
+可以把项目拆成 4 层：
+
+1. `Client Layer`
    - `app.py`
    - `ui_tabs/`
-   - 负责 Streamlit 页面、侧边栏、Tab 和聊天展示。
-2. 运行时状态层
-   - `core/runtime.py`
-   - 负责初始化 `st.session_state`。
-3. Agent 层
-   - `services/chat_service.py`
+   - `cli.py`
+   - `cli_repl.py`
+   - `cli_render.py`
+2. `Shared Runtime Layer`
    - `agent_core.py`
-   - 负责构建 Agent、加载 prompt、发起模型请求、处理 tool call 闭环。
-4. 知识与工具层
+   - `services/agent_factory.py`
+   - `services/session_service.py`
+   - `services/chat_service.py`
+3. `Knowledge and Tool Layer`
    - `rag_engine.py`
    - `core/tool_registry.py`
    - `core/permissions.py`
    - `core/skill_loader.py`
    - `config/tools.json`
-5. 持久化层
+4. `Persistence Layer`
    - `core/session_store.py`
    - `project_catalog/`
    - `license_catalog/`
-   - `chroma_db/` 或 `vector_store.json`
+   - `vector_store.json`
+   - `chroma_db/`
 
-整体主链路可以概括为：
+## 4. 共享 Runtime
 
-`Streamlit UI -> Session State -> Agent -> Tool/RAG/Skill -> 回写消息和任务记录 -> UI 展示`
+### 4.1 核心共享模块
 
-## 3. 程序入口
+共享 runtime 的核心文件有：
 
-### 3.1 `app.py`
+- [agent_core.py](D:\tongjiLabAgent\myLabAgent\agent_core.py)
+- [services/agent_factory.py](D:\tongjiLabAgent\myLabAgent\services\agent_factory.py)
+- [services/session_service.py](D:\tongjiLabAgent\myLabAgent\services\session_service.py)
+- [core/session_store.py](D:\tongjiLabAgent\myLabAgent\core\session_store.py)
+- [rag_engine.py](D:\tongjiLabAgent\myLabAgent\rag_engine.py)
 
-`app.py` 主要负责：
+它们是 Web 和 CLI 共同依赖的部分。
 
-1. 定义项目根目录、上传目录、catalog 目录、session store 等常量。
-2. 设置 Streamlit 页面配置和全局样式。
-3. 调用 `init_session_state(...)` 初始化运行时状态。
-4. 渲染侧边栏。
-5. 渲染三个主 Tab：
-   - `Projects`
-   - `Licenses`
-   - `LabAgent`
+### 4.2 Agent 创建入口
 
-它本身不承担复杂 Agent 逻辑，主要负责装配应用。
+共享的 runtime 创建入口现在是：
 
-## 4. 侧边栏如何把配置变成 Agent
+- [agent_factory.py](D:\tongjiLabAgent\myLabAgent\services\agent_factory.py)
 
-### 4.1 `ui_tabs/sidebar.py`
-
-侧边栏负责采集运行参数，例如：
-
-1. API Key / VIP 登录状态
-2. LLM 模型和 Embedding 模型
-3. 是否允许图片输入、是否支持 thinking
-4. PDF 上传和知识库处理
-
-用户点击“应用配置”后，才会真正调用 `build_agent(...)` 创建：
-
-1. `RAGEngine`
-2. `PermissionManager`
-3. `ToolRegistry`
-4. `SkillLoader`
-5. `LabAgent`
-
-## 5. 运行时状态
-
-### 5.1 `core/runtime.py`
-
-主要依赖 `st.session_state` 保存前端运行时对象和会话信息，包括：
-
-1. `messages`
-2. `rag_engine`
-3. `agent`
-4. `session_id`
-5. `task_id`
-6. `pending_chat_image_path`
-7. `reasoning_mode`
-8. 若干 UI 选择状态
-
-这个项目的“前端状态管理”本质上就是 Streamlit 的 session state。
-
-## 6. Agent 是怎么创建的
-
-### 6.1 `services/chat_service.py`
-
-`build_agent(...)` 当前做了这些事：
+`build_agent_runtime(...)` 的职责：
 
 1. 创建 `RAGEngine`
-2. 创建 `PermissionManager`
+2. 根据 `permission_mode` 构造 `PermissionManager`
 3. 创建 `ToolRegistry`
 4. 创建 `SkillLoader`
-   - 扫描 `myLabAgent/.agent_skills/skills/*/SKILL.md`
-   - 只提取每个 skill 的 `name` 和 `description`
-5. 加载系统提示词 `prompts/lab_agent.md`
+5. 加载 `prompts/lab_agent.md`
 6. 实例化 `LabAgent`
 
-当前允许的权限等级是：
+这个文件不应该依赖 `streamlit`，也不应该依赖 CLI 的渲染逻辑。
 
-1. `READ_ONLY`
-2. `NETWORK`
-3. `EXEC`
+### 4.3 Agent 主循环
 
-## 7. Agent 主逻辑
+- [agent_core.py](D:\tongjiLabAgent\myLabAgent\agent_core.py)
 
-### 7.1 `agent_core.py`
-
-`LabAgent` 是项目的核心。
-
-初始化阶段主要做这些事：
-
-1. 创建 OpenAI 客户端
-2. 保存当前模型名称
-3. 创建天气适配器 `AMapMCPAdapter`
-4. 注入系统提示词
-5. 向 `ToolRegistry` 注册工具：
-   - `retrieve_document`
-   - `recognize_handwritten_digit`
-   - `get_amap_weather`
-   - `load_skill`
-6. 生成 OpenAI 兼容 tools schema
-
-### 7.2 一次聊天请求的完整流程
-
-`LabAgent.chat(...)` 的流程是：
+`LabAgent.chat(...)` 目前是共享 runtime 的主循环，负责：
 
 1. 组装 `system prompt + history messages`
-2. 第一次调用 `client.chat.completions.create(...)`
-3. 如果模型返回 `tool_calls`
-   - 逐个执行工具
-   - 把工具结果包装成 `role="tool"` 消息
-   - 再发起第二次模型调用
-4. 如果模型没有调用工具
-   - 直接输出答案
-5. 把回答按 `answer_chunk` 分段 `yield` 给前端
+2. 发起第一次模型请求
+3. 如果模型返回 `tool_calls`，则执行工具并把 `role="tool"` 消息拼回上下文
+4. 如有必要继续下一轮工具调用
+5. 最终以事件流的方式 `yield` 回调用方
 
-这就是一个有上限的多轮 ReAct / tool-calling 闭环。当前默认最多执行 4 轮工具调用。
-
-### 7.3 前端为什么能显示 thought / tool / result
-
-因为 `chat(...)` 返回的是一个生成器，会逐步吐出：
+当前会产出的事件类型主要有：
 
 1. `thought`
 2. `reasoning`
@@ -163,286 +103,363 @@
 5. `answer_chunk`
 6. `error`
 
-`ui_tabs/chat_tab.py` 根据这些事件更新 `st.status(...)` 和聊天消息区。
+这套事件流是 Web 和 CLI 的共同协议。
 
-## 8. RAG 引擎
+### 4.4 Session 与 Task
 
-### 8.1 `rag_engine.py`
+底层会话落盘：
 
-这个模块负责把 PDF 处理成可检索知识库：
+- [session_store.py](D:\tongjiLabAgent\myLabAgent\core\session_store.py)
 
-1. 用 `pypdf` 读取 PDF
-2. 抽取文本并切块
-3. 调用 embedding 接口生成向量
-4. 写入 Chroma 或本地 `vector_store.json`
+高层会话封装：
 
-### 8.2 检索时做什么
+- [session_service.py](D:\tongjiLabAgent\myLabAgent\services\session_service.py)
 
-`retrieve(...)` 会：
+当前职责分工：
 
-1. 在 Chroma 中查询，或
-2. 在内存向量中手动做相似度计算
+- `SessionStore`
+  - 负责 JSON 落盘
+  - 负责 `create/load/append_message/start_task/finish_task`
+- `SessionService`
+  - 负责更高层的消息追加和 session 查询
+  - 负责 `create_or_resume_session`
+  - 负责 `append_user_message` / `append_assistant_message`
+  - 负责 `list_sessions`
 
-然后把最相关的文档片段返回给 `retrieve_document` 工具。
+后续如果要改 session 文件结构，优先改这里，不要散落在 UI 层里硬写 JSON。
 
-## 9. 工具系统
+### 4.5 工具与权限
 
-工具相关文件：
+共享工具系统由这些文件组成：
 
-1. `config/tools.json`
-2. `core/tool_registry.py`
-3. `core/permissions.py`
-4. `core/skill_loader.py`
-5. `agent_core.py`
+- [tool_registry.py](D:\tongjiLabAgent\myLabAgent\core\tool_registry.py)
+- [permissions.py](D:\tongjiLabAgent\myLabAgent\core\permissions.py)
+- [tools.json](D:\tongjiLabAgent\myLabAgent\config\tools.json)
+- [skill_loader.py](D:\tongjiLabAgent\myLabAgent\core\skill_loader.py)
 
-### 9.1 `config/tools.json`
+当前已注册工具：
 
-负责定义工具的外部接口：
+1. `retrieve_document`
+2. `recognize_handwritten_digit`
+3. `get_amap_weather`
+4. `load_skill`
 
-1. 工具名
-2. 工具说明
-3. 参数 schema
-
-这份配置主要是给模型看的。
-
-### 9.2 `core/tool_registry.py`
-
-负责：
-
-1. 读取 `tools.json`
-2. 注册本地 Python 执行函数
-3. 生成 OpenAI 兼容 tool schema
-4. 在执行前做权限检查
-5. 支持对某些工具描述做运行时覆盖
-
-当前 `load_skill` 的描述就是运行时动态生成的，不是静态写死在 JSON 里。
-
-### 9.3 `core/permissions.py`
-
-这是一个轻量权限白名单：
+当前权限等级包括：
 
 1. `READ_ONLY`
 2. `NETWORK`
 3. `FILE_WRITE`
 4. `EXEC`
 
-工具执行前会先检查该工具对应的权限等级是否被当前运行策略允许。
+`agent_factory.py` 里又在权限等级之上提供了更高层的运行模式：
 
-## 10. 新增的 Skill 机制
+1. `read-only`
+2. `workspace-write`
+3. `full-access`
 
-### 10.1 skill 放在哪里
+这层是给 CLI 和未来多入口统一使用的，不是给模型直接看的。
 
-当前约定 skill 目录为：
+### 4.6 Skill 机制
+
+- [skill_loader.py](D:\tongjiLabAgent\myLabAgent\core\skill_loader.py)
+
+当前 skill 仍然是“可复用说明包”，不是插件系统。
+
+约定目录：
 
 `myLabAgent/.agent_skills/skills/<skill_name>/SKILL.md`
 
-目前每个 skill 至少要有一个 `SKILL.md`。
+当前行为：
 
-### 10.2 `core/skill_loader.py` 做什么
+1. 创建 Agent 时，先扫描 `SKILL.md`
+2. 只把 `name` 和 `description` 暴露给模型
+3. 模型明确调用 `load_skill(name)` 后，才把完整 skill 正文注入上下文
 
-`SkillLoader` 是一个非常轻量的 skill 发现器，不是插件系统。
+这部分仍然是共享 runtime，不应该写死在 Web 或 CLI 里。
 
-它只做三件事：
+## 5. Web 端
 
-1. 扫描 `.agent_skills/skills/*/SKILL.md`
-2. 解析 frontmatter 中的 `name` 和 `description`
-3. 在真正调用时返回完整 `SKILL.md` 正文
+### 5.1 Web 入口文件
 
-### 10.3 skill 是怎么暴露给模型的
+Web 相关核心文件：
 
-这里采用的是“metadata 先暴露，正文按需加载”的最小模式。
+- [app.py](D:\tongjiLabAgent\myLabAgent\app.py)
+- [core/runtime.py](D:\tongjiLabAgent\myLabAgent\core\runtime.py)
+- [ui_tabs/sidebar.py](D:\tongjiLabAgent\myLabAgent\ui_tabs\sidebar.py)
+- [ui_tabs/chat_tab.py](D:\tongjiLabAgent\myLabAgent\ui_tabs\chat_tab.py)
+- [services/chat_service.py](D:\tongjiLabAgent\myLabAgent\services\chat_service.py)
 
-具体来说：
+### 5.2 Web 的职责
 
-1. 创建 Agent 时，`SkillLoader` 扫描所有 skills。
-2. `load_skill` 工具的 description 会被动态改写。
-3. 改写后的 description 里包含一个 `<available_skills>` 列表，只放：
-   - `name`
-   - `description`
-   - `location`
-4. 模型先根据这些 metadata 判断有没有匹配 skill。
-5. 只有当模型明确调用 `load_skill(name)` 时，后端才把完整 skill 内容放进上下文。
+Web 层只负责：
 
-这个设计避免了把所有 skill 全文一开始就塞进 system prompt，减少上下文浪费。
+1. 设置页面和样式
+2. 初始化 `st.session_state`
+3. 读取侧边栏输入
+4. 调用共享 runtime 创建 `agent`
+5. 在聊天区域消费 `agent.chat(...)` 事件流
+6. 把中间状态展示成 `st.status(...)` 和聊天消息
 
-### 10.4 `load_skill` 工具返回什么
+### 5.3 Web 特有状态
 
-`load_skill(name)` 返回的是一个文本块，包含：
+- [runtime.py](D:\tongjiLabAgent\myLabAgent\core\runtime.py)
 
-1. `<skill_content name="...">`
-2. 完整 `SKILL.md` 正文
-3. skill base directory
-4. 少量文件列表 `<skill_files>`
+这个文件是 `Web only`。它的职责是初始化和维护 `st.session_state`，包括：
 
-这样模型在读完 skill 之后，知道：
+1. `messages`
+2. `agent`
+3. `rag_engine`
+4. `session_id`
+5. `task_id`
+6. `pending_chat_image_path`
+7. 若干 UI 选择状态
 
-1. skill 说了什么
-2. skill 的相对路径应该相对于哪个目录解释
-3. 目录里大概还有哪些文件可以继续参考
+这里不应该放 CLI 逻辑，也不应该放共享 runtime 的核心规则。
 
-### 10.5 scripts / reference / assets 会不会自动执行
+### 5.4 Web 侧服务适配层
 
-不会。
+- [chat_service.py](D:\tongjiLabAgent\myLabAgent\services\chat_service.py)
 
-当前实现里，skill 的职责只是：
+这个文件当前是 `Web adapter`，不是共享 runtime 核心。
 
-1. 提供可复用说明
-2. 提供资源入口
-3. 帮模型决定下一步该做什么
+它现在做两件事：
 
-即使某个 skill 目录下存在：
+1. 调用 `build_agent_runtime(...)` 创建 Web 所需 Agent
+2. 用 `st.session_state` 创建 task 并记录 `task_id`
 
-1. `scripts/`
-2. `reference/`
-3. `assets/`
+后续如果 Web 有更多特有逻辑，继续放这里或拆到 `services/web_*` 文件里，不要回写到 `agent_factory.py`。
 
-它们也不会因为 `load_skill` 被调用就自动执行。
+### 5.5 Web 链路
 
-当前行为是：
+当前 Web 主链路是：
 
-1. skill 被加载时，只返回 `SKILL.md` 和文件列表
-2. 如果后续模型想使用这些资源，仍然必须继续走正常工具链
-3. 真正执行动作的仍然是普通 tool，而不是 skill 本身
+`Streamlit UI -> st.session_state -> build_agent_runtime -> LabAgent.chat -> tool/RAG/skill -> session_store -> UI 展示`
 
-所以在本项目里：
+### 5.6 Web 维护建议
 
-`skill = 可复用说明包`
-`tool = 真正执行动作`
+如果以后改的是这些内容，优先改 Web 层：
 
-### 10.6 为什么采用这个最小方案
+1. 页面布局
+2. 侧边栏配置表单
+3. Tab 结构
+4. 聊天展示方式
+5. 图片上传与前端预览
 
-因为它有几个优点：
+如果以后改的是这些内容，不要只改 Web，要同步考虑 CLI：
 
-1. 侵入性小，不需要改动现有 tool-calling 主链路
-2. 不需要设计复杂插件协议
-3. 不需要给 skill 单独设计执行沙箱
-4. 后续如果你想把某些高价值 skill 再升级成专门工具，也不冲突
+1. Agent 事件类型
+2. Tool 行为
+3. Session 数据结构
+4. Permission 模型
+5. Prompt 装配逻辑
 
-## 11. 从输入到回答的完整链路
+## 6. CLI 端
 
-### 11.1 用户发送消息时
+### 6.1 CLI 入口文件
 
-在 `ui_tabs/chat_tab.py` 中：
+CLI 相关核心文件：
 
-1. `st.chat_input(...)` 接收输入
-2. `start_task(...)` 创建任务记录
-3. 组装 `user_message`
-4. 写入 `st.session_state.messages`
-5. 同步写入 `session_store`
+- [cli.py](D:\tongjiLabAgent\myLabAgent\cli.py)
+- [cli_repl.py](D:\tongjiLabAgent\myLabAgent\cli_repl.py)
+- [cli_render.py](D:\tongjiLabAgent\myLabAgent\cli_render.py)
+- [services/agent_factory.py](D:\tongjiLabAgent\myLabAgent\services\agent_factory.py)
+- [services/session_service.py](D:\tongjiLabAgent\myLabAgent\services\session_service.py)
 
-如果携带图片：
+### 6.2 CLI 的职责
 
-1. 先保存到 `uploads/chat_images/`
-2. 转成 `data URL`
-3. 作为多模态内容发给模型
+CLI 层只负责：
 
-### 11.2 Agent 第一次请求模型
+1. 解析命令行参数
+2. 读取 env / `vip_config.json`
+3. 初始化共享 runtime
+4. 进入 REPL 或执行单轮 ask
+5. 用 `rich` 渲染事件流
+6. 把消息和 task 写入 session
 
-内部会构造：
+### 6.3 当前 CLI 命令
 
-```python
-full_messages = [{"role": "system", "content": self.system_prompt}] + messages
+- `python cli.py chat`
+- `python cli.py ask "..."`
+- `python cli.py resume <session_id>`
+- `python cli.py session-list`
+
+### 6.4 当前 CLI REPL 内置命令
+
+- `/help`
+- `/session`
+- `/models`
+- `/exit`
+
+其中 `/models` 会：
+
+1. 从当前 profile 的 `vip_config.json` 里读取 `llm_models`
+2. 在终端弹出单选列表
+3. 用方向键移动
+4. 用空格选中
+5. 用回车确认
+6. 重新构造当前 agent，并切换后续对话所使用的模型
+
+### 6.5 CLI 参数配置来源
+
+当前 CLI 的配置优先级大致是：
+
+1. CLI 参数
+2. 环境变量
+3. `vip_config.json`
+4. 代码内置默认值
+
+主要配置项包括：
+
+1. `--model`
+2. `--base-url`
+3. `--api-key`
+4. `--embedding-model`
+5. `--embedding-base-url`
+6. `--embedding-api-key`
+7. `--profile`
+8. `--sandbox`
+9. `--reasoning`
+10. `--max-tool-rounds`
+
+### 6.6 CLI 渲染层
+
+- [cli_render.py](D:\tongjiLabAgent\myLabAgent\cli_render.py)
+
+当前使用 `rich` 渲染：
+
+1. banner
+2. 帮助信息
+3. 工具调用输入
+4. 工具结果
+5. 最终回答
+6. session 列表
+7. `/models` 模型选择器
+
+如果以后只是要改终端展示样式，优先改这里，不要碰 `LabAgent.chat(...)`。
+
+### 6.7 CLI REPL 层
+
+- [cli_repl.py](D:\tongjiLabAgent\myLabAgent\cli_repl.py)
+
+当前职责：
+
+1. 读取用户输入
+2. 处理 `/exit`、`/help`、`/session`、`/models`
+3. 追加 user message
+4. 创建 task
+5. 调用 `agent.chat(...)`
+6. 消费事件并落盘 assistant message
+
+如果以后要加 CLI 特有命令，比如：
+
+1. `/sandbox`
+2. `/history`
+3. `/tools`
+
+应该优先改这个文件。
+
+### 6.8 CLI 链路
+
+当前 CLI 主链路是：
+
+`argparse -> config resolve -> build_agent_runtime -> CliRepl -> LabAgent.chat -> tool/RAG/skill -> session_store -> rich render`
+
+### 6.9 CLI 维护建议
+
+如果以后改的是这些内容，优先改 CLI 层：
+
+1. 命令结构
+2. shell 友好参数
+3. REPL 命令
+4. Rich 样式
+5. 会话恢复显示
+6. 模型选择交互
+
+如果未来要往 `Claude Code / OpenCode` 方向继续演进，CLI 层最优先新增的是：
+
+1. 文件读取工具
+2. 目录浏览工具
+3. 文本搜索工具
+4. 文件写入工具
+5. shell 执行工具
+6. 更细粒度的 sandbox
+
+## 7. 当前两个入口的分工边界
+
+可以用下面这张表快速判断“改动应该放哪里”。
+
+| 变化内容 | 应该优先修改的位置 |
+| --- | --- |
+| Streamlit 页面布局 | Web |
+| 侧边栏模型选择 | Web |
+| Rich 输出样式 | CLI |
+| REPL 命令 | CLI |
+| `/models` 交互选择器 | CLI |
+| Agent 创建方式 | Shared Runtime |
+| Prompt 加载 | Shared Runtime |
+| Tool 注册和权限 | Shared Runtime |
+| Session JSON 结构 | Shared Runtime |
+| RAG 检索逻辑 | Shared Runtime |
+| Tool-calling 主循环 | Shared Runtime |
+
+## 8. 推荐的后续演进顺序
+
+为了长期维护更稳，建议按这个顺序继续演进：
+
+1. 先稳定共享 runtime
+   - 统一事件类型
+   - 统一 session 数据结构
+   - 统一权限模式
+2. 再补 CLI 能力
+   - `read_file`
+   - `list_dir`
+   - `search_text`
+   - `write_file`
+   - `run_shell`
+3. 再考虑更强的交互层
+   - Web 增强
+   - CLI 命令增强
+   - 未来如果需要再做 TUI
+
+## 9. 运行方式
+
+### 9.1 Web
+
+```bash
+python -m pip install -r requirements.txt
+python -m streamlit run app.py
 ```
 
-然后带着 `tools=self.tools` 发给模型。
+### 9.2 CLI
 
-### 11.3 如果模型决定用工具
+```bash
+python -m pip install -r requirements.txt
+python cli.py --help
+python cli.py chat
+python cli.py ask "解释当前项目结构"
+python cli.py session-list
+```
 
-可能有两类情况：
+进入 CLI 交互后，可以输入：
 
-1. 直接调用业务工具
-   - `retrieve_document`
-   - `recognize_handwritten_digit`
-   - `get_amap_weather`
-2. 先调用 `load_skill`
-   - 先把 skill 正文加载进上下文
-   - 再根据 skill 指引决定后续是否继续调用其他工具
+```text
+/models
+```
 
-### 11.4 工具执行后
+来切换当前会话使用的模型。
 
-后端会：
+## 10. 最重要的维护结论
 
-1. 执行工具函数
-2. 记录 tool event
-3. 将结果作为 `role="tool"` 消息拼回上下文
-4. 如果模型还在请求工具，就继续下一轮；否则生成最终答案
+现在这个项目已经不是“只有一个 Streamlit 页面”的结构，而是：
 
-### 11.5 前端展示时
+- 一套共享 Agent runtime
+- 一个 Web client
+- 一个 CLI client
 
-前端会：
+以后长期维护时，尽量把新增能力先判断清楚属于哪一层：
 
-1. 显示中间状态
-2. 流式拼接最终答案
-3. 将结果写入 assistant 消息
-4. 完成任务记录
+- 属于交互体验，就放 Web 或 CLI
+- 属于 Agent 能力，就放 Shared Runtime
+- 属于落盘与知识库，就放 Persistence 或 Knowledge 层
 
-## 12. 会话与任务持久化
-
-### 12.1 `core/session_store.py`
-
-落盘目录：
-
-`app_data/sessions/<session_id>.json`
-
-每个 session 文件大致包含：
-
-1. `session_id`
-2. `created_at`
-3. `updated_at`
-4. `messages`
-5. `tasks`
-
-每个 task 包含：
-
-1. `task_id`
-2. `prompt`
-3. `status`
-4. `tool_events`
-5. `result`
-
-## 13. 非聊天页面的数据来源
-
-### 13.1 Projects Tab
-
-数据来自：
-
-1. `project_catalog/index.json`
-2. `project_catalog/projects/*.json`
-3. 对应 Markdown 和媒体资源
-
-### 13.2 Licenses Tab
-
-数据来自：
-
-1. `license_catalog/index.json`
-2. `license_catalog/licenses/*.json`
-3. 对应 logo 等静态资源
-
-## 14. 当前最值得注意的设计点
-
-### 14.1 Agent 与 UI 分层还算清楚
-
-聊天页不直接做模型调用，真正的 Agent 逻辑在 `agent_core.py`。
-
-### 14.2 工具系统依然是最适合扩展的地方
-
-新增工具通常只要补三件事：
-
-1. `config/tools.json`
-2. 本地执行函数
-3. 注册代码
-
-新增的 `load_skill` 也是沿用这条路径加进去的。
-
-### 14.3 skill 机制故意做得很轻
-
-它不是插件执行框架，而是“可按需注入上下文的说明包”。
-
-这样可以先把 skill 机制引入进来，而不会把项目复杂度一下抬高。
-
-## 15. 一句话总结
-
-`myLabAgent` 现在是一个以聊天 Agent 为核心、带 RAG、工具调用、轻量 skill 加载、项目展示和 License 展示的 Streamlit 应用。
-
-新增 skill 之后，系统多了一层“先发现可复用 workflow，再按需加载说明”的能力，但真正的执行动作仍然由原有工具系统完成。
-
+这样后面不管你继续做 Web、CLI 还是更进一步做 TUI，都不会反复拆旧代码。

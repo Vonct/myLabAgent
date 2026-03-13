@@ -144,24 +144,23 @@ class RAGEngine:
             self._connect_chroma()
 
     def _iter_text_chunks(self, reader: PdfReader, chunk_size: int, overlap: int):
-        carry = ""
         step = max(1, chunk_size - overlap)
-        last_page_index = 0
         for page_index, page in enumerate(reader.pages):
-            last_page_index = page_index
-            extracted = page.extract_text() or ""
-            if not extracted.strip():
+            extracted = (page.extract_text() or '').strip()
+            if not extracted:
                 continue
-            page_text = f"{carry}{extracted}\n"
+            if len(extracted) <= chunk_size:
+                yield page_index, extracted
+                continue
+
             start = 0
-            while start + chunk_size <= len(page_text):
-                yield page_index, page_text[start:start + chunk_size]
+            while start < len(extracted):
+                chunk = extracted[start:start + chunk_size].strip()
+                if chunk:
+                    yield page_index, chunk
+                if start + chunk_size >= len(extracted):
+                    break
                 start += step
-            carry = page_text[start:]
-            if len(carry) > overlap:
-                carry = carry[-overlap:]
-        if carry.strip():
-            yield last_page_index, carry
 
     def _flush_batch(self, ids, chunks, metadatas):
         if not chunks:
@@ -190,8 +189,8 @@ class RAGEngine:
         try:
             LOGGER.info("Start processing file: %s", filename)
             reader = PdfReader(file_content)
-            chunk_size = 1000
-            overlap = 100
+            chunk_size = 1500
+            overlap = 200
             embed_batch_size = 10
             file_usage = {"input_tokens": 0, "total_tokens": 0}
             batch_ids = []

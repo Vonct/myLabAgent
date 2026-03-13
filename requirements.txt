@@ -1,4 +1,4 @@
-openai
+﻿openai
 streamlit
 chromadb
 pypdf
@@ -7,3 +7,4 @@ torch
 torchvision
 pillow
 mcp
+rich

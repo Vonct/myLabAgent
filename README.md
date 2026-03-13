@@ -1,103 +1,207 @@
-# DocAgent 演示项目：文档阅读与智能问答 Agent 框架
+﻿# myLabAgent
 
-这是一个基于 OpenAI SDK + Qwen 兼容接口构建的教学级 Demo 项目，旨在演示一个现代 AI Agent 框架的核心工作流程，包括 RAG（检索增强生成）、Tool Use（工具调用）和多轮对话管理。
+`myLabAgent` 是一个基于 `OpenAI SDK 兼容接口` 的实验室 Agent 项目，当前同时支持两种交互入口：
 
-## 📁 目录说明
+1. `Web`，基于 `Streamlit`
+2. `CLI`，基于 `argparse + rich`
 
-- `app.py`: 基于 Streamlit 的 Web 界面实现，负责 UI 渲染和对话状态管理。
-- `agent_core.py`: **核心 Agent 逻辑**，实现了 ReAct 模式（思考 -> 行动 -> 观察 -> 再思考）。
-- `rag_engine.py`: **RAG 引擎**，负责 PDF 解析、文本分块、Qwen Embedding 向量化与 Chroma 检索。
-- `requirements.txt`: 项目所需的 Python 依赖包。
-- `vip_config.example.json`: VIP 本地登录配置样例（复制为 `vip_config.json` 后生效）。
+两个入口共享同一套 Agent runtime、RAG、工具系统和 session 持久化能力。
 
-## 🚀 核心功能模块解析
+## 目录说明
 
-### 1. 文档解析与向量化 (RAG Engine)
-在 `rag_engine.py` 中，我们使用：
-- `pypdf`: 将 PDF 物理内容转换为字符串。
-- `OpenAI SDK + Qwen Embedding`: 将文本片段转换为高维向量。
-- `ChromaDB`: 持久化存储向量索引，支持基于余弦相似度的语义检索。
+核心文件和目录：
 
-### 2. 工具调用能力 (Tool Use)
-在 `agent_core.py` 中，我们为 LLM 注册了 `retrieve_document` 函数。
-- **决策机制**：当 LLM 发现用户的提问涉及特定事实（例如“文档中提到的 XX 方案是什么？”）时，它会自动生成 `tool_calls` 请求。
-- **执行闭环**：Agent 拦截该请求，调用本地 `rag_engine` 检索，并将结果回填给 LLM。
+- `app.py`：Web 入口，负责 Streamlit 页面装配
+- `cli.py`：CLI 入口，支持单轮命令和多轮 REPL
+- `agent_core.py`：核心 Agent loop，负责模型调用和 tool-calling 闭环
+- `services/agent_factory.py`：共享 runtime 工厂
+- `services/session_service.py`：session 高层封装
+- `core/session_store.py`：session JSON 落盘
+- `rag_engine.py`：PDF 解析、切块、embedding、向量检索
+- `core/tool_registry.py`：工具注册与权限检查
+- `core/skill_loader.py`：本地 skill 发现与按需加载
+- `config/tools.json`：工具 schema 定义
+- `TECH_INTERACTION.md`：长期维护视角的技术说明
 
-### 3. 对话记忆管理
-利用 `streamlit` 的 `session_state` 维护 `messages` 数组。
-- 每一轮对话都会将 `(role, content)` 对追加到历史中，并随请求一起发送给 OpenAI，从而实现具备上下文感知的多轮交流。
+## 当前能力
 
-### 4. 推理过程可视化
-在 `app.py` 中，利用 `st.status` 组件动态展示 Agent 的中间状态：
-- 思考中（Thought）
-- 调用工具（Action）
-- 观察结果（Observation）
-- 生成最终回答（Final Answer）
+### 1. 聊天问答
+- 多轮对话
+- OpenAI 兼容 chat completion 调用
+- 工具调用闭环
+- 基础任务与 session 持久化
 
-### 5. 项目介绍选项卡
-- 顶部新增“项目介绍”Tab，用于展示实验室项目卡片。
-- 页面只读取 `doc_agent_demo/project_catalog` 下的持久化项目数据。
-- 点击卡片后优先展示对应 Markdown 详情（含图片），无 Markdown 时回退章节视图。
-- 新增项目时先离线解析并入库，再在网页展示。
+### 2. RAG 检索增强
+- PDF 文本提取
+- 文本切块
+- Embedding 向量化
+- Chroma 或本地 memory backend 检索
 
-## 🛠️ 如何运行
+### 3. 工具系统
+当前已接入工具：
+- `retrieve_document`
+- `recognize_handwritten_digit`
+- `get_amap_weather`
+- `load_skill`
 
-1. 安装依赖：
-   ```bash
-   pip install -r requirements.txt
-   python -m pip install -r requirements.txt
-   ```
-2. 启动应用：
-   ```bash
-   streamlit run app.py
-   python -m streamlit run app.py
-   ```
-3. 在侧边栏选择模型并输入 DashScope API Key。
-4. 点击 `Apply 配置` 使配置生效。
-5. 上传 PDF 文档并点击“开始解析”。
-6. 开始提问。
-7. 切换到顶部“项目介绍”选项卡可查看实验室项目卡片与详情。
+### 4. Skill 机制
+本地 skill 存放在：
 
-## 📚 项目介绍数据入库
-
-1. 使用脚本将 PPT 解析后写入后端目录：
-   ```bash
-   python doc_agent_demo/scripts/build_project_catalog.py --pptx your_project_slides.pptx --catalog doc_agent_demo/project_catalog --project-id your_project_id --category 你的项目分类 --display-order 1
-   ```
-2. 生成结果：
-   - `doc_agent_demo/project_catalog/index.json`
-   - `doc_agent_demo/project_catalog/projects/<project_id>.json`
-   - `doc_agent_demo/project_catalog/media/<project_id>/`（自动抽取的图片资源）
-3. 网页端只读取上述目录，不在访问时临时解析 PPT。
-
-## 🔐 VIP 本地登录（调试模式）
-
-1. 复制 `vip_config.example.json` 为 `vip_config.json`。
-2. 在 `vip_config.json` 中填写用户名、密码哈希、模型 API Key 与 base_url。
-3. 可在每个 LLM 模型下配置能力开关：
-   - `supports_image_input`: 是否支持图片输入（多模态）
-   - `supports_thinking`: 是否支持 `enable_thinking` 参数
-4. 启动后在侧边栏切换为“VIP登录”并输入账号密码。
-
-密码哈希可用以下方式生成：
-```bash
-python -c "import hashlib; print(hashlib.sha256('你的密码'.encode()).hexdigest())"
+```text
+.agent_skills/skills/<skill_name>/SKILL.md
 ```
 
-## 🔢 手写数字识别的跨电脑配置
+运行时只先暴露 skill metadata，模型需要时再通过 `load_skill(name)` 按需加载完整正文，避免把所有 skill 全文一开始塞进上下文。
 
-数字识别工具会按以下顺序查找 Python 解释器：
-- 当前运行应用的 Python
-- 项目目录下 `.venv`
+## 运行架构
 
-推荐两台电脑统一做法：
-1. 在项目根目录创建并使用同名环境（推荐 `.venv`）。
-2. 在该环境安装依赖：`pip install -r requirements.txt`。
-3. 先用当前应用 Python 运行，若失败会自动回退到项目 `.venv`，两者都不可用会提示检查依赖。
+可以简单理解为三层：
 
-## ⚠️ 注意事项
-- 当前支持 LLM 模型为 `qwen3.5-plus`，Embedding 模型为 `text-embedding-v4`，通过下拉列表选择后点击 `Apply 配置` 生效。
-- 图片附件会直接以多模态消息传入 LLM；若当前模型不支持图片输入，附件入口会自动禁用。
-- 深度思考模式会按模型能力自动控制；不支持该参数的模型会自动关闭该开关。
-- 确保您的 API Key 余额充足，且网络环境可正常访问阿里云百炼兼容接口。
-- `vip_config.json` 内含敏感信息，请勿提交到公共仓库。
+1. `Client Layer`
+   - Web: `app.py`, `ui_tabs/`
+   - CLI: `cli.py`, `cli_repl.py`, `cli_render.py`
+2. `Shared Runtime Layer`
+   - `agent_core.py`
+   - `services/agent_factory.py`
+   - `services/session_service.py`
+3. `Knowledge / Persistence Layer`
+   - `rag_engine.py`
+   - `core/session_store.py`
+   - `project_catalog/`
+   - `license_catalog/`
+   - `vector_store.json` / `chroma_db/`
+
+## 安装依赖
+
+```bash
+python -m pip install -r requirements.txt
+```
+
+## Web 用法
+
+启动方式：
+
+```bash
+python -m streamlit run app.py
+```
+
+Web 端当前提供：
+- 项目介绍 Tab
+- License 看板 Tab
+- LabAgent 聊天 Tab
+- 侧边栏模型与知识库配置
+
+## CLI 用法
+
+查看帮助：
+
+```bash
+python cli.py --help
+```
+
+进入多轮 REPL：
+
+```bash
+python cli.py chat
+```
+
+单轮提问：
+
+```bash
+python cli.py ask "解释当前项目结构"
+```
+
+恢复历史 session：
+
+```bash
+python cli.py resume <session_id>
+```
+
+列出最近 session：
+
+```bash
+python cli.py session-list
+```
+
+在 REPL 中可用的内置命令：
+- `/help`
+- `/session`
+- `/models`：从 `vip_config.json` 读取可选模型，方向键移动，空格选中，回车确认
+- `/exit`
+
+CLI 支持的常用参数：
+- `--model`
+- `--base-url`
+- `--api-key`
+- `--embedding-model`
+- `--embedding-base-url`
+- `--embedding-api-key`
+- `--profile`
+- `--sandbox`
+- `--reasoning`
+- `--max-tool-rounds`
+
+## 配置来源
+
+当前运行配置优先级大致是：
+
+1. 命令行参数
+2. 环境变量
+3. `vip_config.json`
+4. 代码默认值
+
+如果你使用本地 VIP 配置：
+
+1. 复制 `vip_config.example.json` 为 `vip_config.json`
+2. 填入模型 API Key 和 base URL
+3. CLI 可通过 `--profile <username>` 选择 profile
+4. Web 可通过侧边栏登录和切换配置
+
+## Session 持久化
+
+session 会保存到：
+
+```text
+app_data/sessions/<session_id>.json
+```
+
+每个 session 文件当前包含：
+- `session_id`
+- `created_at`
+- `updated_at`
+- `messages`
+- `tasks`
+
+## 权限模型
+
+当前工具权限等级：
+- `READ_ONLY`
+- `NETWORK`
+- `FILE_WRITE`
+- `EXEC`
+
+共享 runtime 之上又定义了运行模式：
+- `read-only`
+- `workspace-write`
+- `full-access`
+
+CLI 目前通过 `--sandbox` 选择运行模式。
+
+## 推荐维护方式
+
+后续维护时，优先遵守这个边界：
+
+- Web 变化放在 `app.py`、`ui_tabs/`、`core/runtime.py`
+- CLI 变化放在 `cli.py`、`cli_repl.py`、`cli_render.py`
+- Agent 能力变化放在 `agent_core.py`、`services/agent_factory.py`、`core/*`
+
+如果你要继续往 `Claude Code / OpenCode` 方向演进，建议下一步优先补：
+- 文件读取工具
+- 目录浏览工具
+- 文本搜索工具
+- 文件写入工具
+- shell 执行工具
+
+## 相关文档
+
+- [TECH_INTERACTION.md](D:\tongjiLabAgent\myLabAgent\TECH_INTERACTION.md)

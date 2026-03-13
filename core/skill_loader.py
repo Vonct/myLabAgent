@@ -103,6 +103,7 @@ class SkillLoader:
         lines.append('</available_skills>')
         return '\n'.join(lines)
 
+    # 返回skill正文
     def render_skill_content(self, name: str) -> str:
         skill = self.get(name)
         if skill is None:

@@ -127,7 +127,7 @@ def _render_chat_toolbar(supports_image_input: bool, supports_thinking: bool) ->
             st.caption('当前模型不支持图片输入。')
     with right_col:
         reasoning_mode = st.toggle(
-            '深度思考',
+            '🧠 深度思考',
             value=st.session_state.get('reasoning_mode', False),
             key='reasoning_mode_toggle',
             disabled=not supports_thinking,
