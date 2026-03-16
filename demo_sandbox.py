@@ -15,10 +15,6 @@ WORKSPACE_ROOT = Path(__file__).resolve().parent
 MAX_STDOUT_CHARS = 4000
 
 
-def safe_console(text: str) -> str:
-    return text.encode("unicode_escape").decode("ascii")
-
-
 @dataclass
 class SandboxRequest:
     trace_id: str
@@ -85,8 +81,9 @@ class DemoSandbox:
         )
 
         if proc.stderr.strip():
-            print(f"[parent] worker-stderr={safe_console(proc.stderr.strip())}")
+            print(f"[parent] worker-stderr={proc.stderr.strip()}")
 
+        # 非0表示执行失败
         if proc.returncode != 0:
             return SandboxResponse(
                 ok=False,
@@ -99,7 +96,7 @@ class DemoSandbox:
         raw_stdout = proc.stdout.strip()
         if len(raw_stdout) > MAX_STDOUT_CHARS:
             raw_stdout = raw_stdout[:MAX_STDOUT_CHARS] + "...(truncated)"
-        print(f"[parent] worker-stdout={safe_console(raw_stdout)}")
+        print(f"[parent] worker-stdout={raw_stdout}")
 
         try:
             result = json.loads(proc.stdout)
@@ -256,7 +253,7 @@ def handle_action(root: Path, trace_id: str, action: str, args: dict[str, Any]) 
 
 def print_result(title: str, response: SandboxResponse) -> None:
     print(f"\n=== {title} ===")
-    print(safe_console(json.dumps(asdict(response), ensure_ascii=False, indent=2)))
+    print(json.dumps(asdict(response), ensure_ascii=False, indent=2))
 
 
 def run_demo() -> int:
