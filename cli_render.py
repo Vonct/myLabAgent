@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import os
 import sys
@@ -6,6 +6,7 @@ import time
 from contextlib import contextmanager
 
 from rich.align import Align
+from rich.columns import Columns
 from rich.console import Console, Group
 from rich.live import Live
 from rich.markdown import Markdown
@@ -27,35 +28,95 @@ class CliRenderer:
         self.console = console or Console()
         self._answer_started = False
 
-    def _build_bot_mark(self) -> Text:
+    def _supports_pixel_art(self) -> bool:
+        encoding = (getattr(sys.stdout, 'encoding', '') or '').lower()
+        if 'utf-8' in encoding or 'utf8' in encoding:
+            return True
+        return bool(os.environ.get('WT_SESSION'))
+
+    def _build_echo_logo_ascii(self) -> Text:
         return Text.from_markup(
-            "[bold bright_white]              __              \n"
-            "[bold bright_white]         _.-'  '-._         \n"
-            "[bold cyan]      _.-'   .--.   '-._      \n"
-            "[bold cyan]    .'      / /\\ \\      '.    \n"
-            "[bold bright_white]   /  _..-'/ [cyan]/  \\\\[/cyan] '\\-.._  \\\n"
-            "[bold bright_white]  |.-' __ /  [bright_white].--.[/bright_white]  \\\\ __'-.|\n"
-            "[bold cyan]  /   .'/  | [bright_white]/ .. \\\\[/bright_white] |  \\\\'.   \\\n"
-            "[bold cyan] |   / /   | [bright_white]\\\\_--_//[/bright_white] |   \\\\ \\   |\n"
-            "[bold bright_white]  \\\\  \\\\_.-'/_.-.__.-._\\\\'-._//  /\n"
-            "[bold bright_white]   '._   _.'   /__\\\\   '._   _.' \n"
-            "[bold bright_white]      '-.'    /_/  \\_\\\\    '.-'    \n"
+            "[bright_cyan]            ___  ___            \n"
+            "[bright_cyan]         .-########-.         \n"
+            "[cyan]               .-####/====\\####-.       \n"
+            "[cyan]            /#####/  /\\  \\#####\\      \n"
+            "[bright_white]     /#####|  /--\\  |#####\\     \n"
+            "[bright_white]    |######| | /\\ | |######|    \n"
+            "[bright_white]    |######| | [][]| |######|    \n"
+            "[bright_white]    |######| | \\//| |######|    \n"
+            "[bright_cyan]     \\#####|  \\__/  |#####/     \n"
+            "[bright_cyan]      \\#####\\______/#####/      \n"
+            "[cyan]        '-####______####-'        \n"
+            "[dark_orange]            --  --            \n"
         )
 
-    def _build_logo(self) -> Text:
+    def _build_echo_logo_pixel(self) -> Text:
         return Text.from_markup(
-            "[bold cyan]"
-            "  _          _      _                    _   \n"
-            " | |    __ _| |__  / \\   __ _  ___ _ __ | |_ \n"
-            " | |   / _` | '_ \\ / _ \\ / _` |/ _ \\ '_ \\| __|\n"
-            " | |__| (_| | |_) / ___ \\ (_| |  __/ | | | |_ \n"
-            " |_____\\__,_|_.__/_/   \\_\\__, |\\___|_| |_|\\__|\n"
-            "                         |___/                \n"
-            "[/bold cyan]"
+            "[bright_cyan]                  ▄▄▄▄▄▄▄▄▄                  \n"
+            "[bright_cyan]              ▄███████████████▄              \n"
+            "[cyan]        ▄███████▀▀▀       ▀▀▀███████▄        \n"
+            "[cyan]  ▄▄▄▄█████▀                      ▀█████▄▄▄▄  \n"
+            "[bright_white]      ▄████▀    ▄▄          ▄▄    ▀████▄      \n"
+            "[bright_white]     ████▀    ▄████▄      ▄████▄    ▀████     \n"
+            "[bright_white]    ████     ████████    ████████     ████    \n"
+            "[bright_white]    ████     ███  ▀██    ██▀  ███     ████    \n"
+            "[bright_white]    ████     ███▄▄▄██    ██▄▄▄███     ████    \n"
+            "[bright_cyan]     ▀████▄    ▀████▀  ▄▄  ▀████▀    ▄████▀     \n"
+            "[bright_cyan]      ▀████▄         ████         ▄████▀      \n"
+            "[cyan]       ▄▄▄▄██████▄▄               ▄▄██████▀       \n"
+            "[cyan]          ▀████████▄▄▄▄▄▄▄▄████████▀          \n"
+            "[dark_orange]                    ▀▀  ▀▀                    \n"
+            "[green]               ▄█████████████               \n"
+            "[green]               ██[yellow]▀▄[/][green]██[bright_white]▄[/][green]██[yellow]▀▄[/][green]██               \n"
+            "[green]               ██[yellow]▄▀[/][green]██[bright_white]▀[/][green]██[yellow]▄▀[/][green]██               \n"
+            "[green]               ▀█████████████               \n"
+        )
+    
+    def _build_echo_logo_pixel2(self) -> Text:
+        return Text.from_markup(
+            "[bright_cyan]                ▄▄▄▄▄▄▄                \n"
+            "[bright_cyan]             ▄███████████▄             \n"
+            "[bright_cyan]           ▄███████████████▄           \n"
+            "[cyan]        ▄███████▀▀   ▀▀███████▄        \n"
+            "[cyan]        ▄█████▀         ▀█████▄        \n"
+            "[bright_white]        ████     ▄   ▄     ████        \n"
+            "[bright_white]        ████    ██   ██    ████        \n"
+            "[bright_white]        ████     ▀   ▀     ████        \n"
+            "[bright_white]        ████               ████        \n"
+            "[cyan]          ▀████▄       ▄████▀          \n"
+            "[cyan]            ▀████▄▄▄▄▄████▀            \n"
+            "[bright_cyan]             ▀███████████▀             \n"
+            "[bright_cyan]                 ▀███▀                 \n"
+            "\n"
+            "[green]            ▄█████████████▄            \n"
+            "[green]            ██[yellow]▀▄[/][green]██[bright_white]▄[/][green]██[yellow]▀▄[/][green]██            \n"
+            "[green]            ██[yellow]▄▀[/][green]██[bright_white]▀[/][green]██[yellow]▄▀[/][green]██            \n"
+            "[green]            ▀█████████████▀            \n"
+        )
+
+
+    def _build_echo_logo(self) -> Text:
+        if self._supports_pixel_art():
+            return self._build_echo_logo_pixel()
+        return self._build_echo_logo_ascii()
+
+    def _build_wordmark(self) -> Text:
+        return Text.from_markup(
+            "[bold bright_cyan]"
+            " \n"
+            " \n"
+            " _        _    ____    _    ____ _____ _   _ _____\n"
+            "| |      / \\  | __ )  / \\  / ___| ____| \\ | |_   _|\n"
+            "| |     / _ \\ |  _ \\ / _ \\| |  _|  _| |  \\| | | |  \n"
+            "| |___ / ___ \\| |_) / ___ \\ |_| | |___| |\\  | | |  \n"
+            "|_____/_/   \\_\\____/_/   \\_\\____|_____|_| \\_| |_|  \n"
+            "[/bold bright_cyan]"
         )
 
     def _build_signature(self) -> Text:
-        return Text.from_markup("[dim]crafted by[/dim] [italic bright_white]Vonct[/italic bright_white]")
+        return Text.from_markup(
+            "[dim]crafted by[/dim] [italic bright_white]Vonct[/italic bright_white]"
+        )
 
     def _build_meta(self, session_id: str, model_name: str) -> Text:
         return Text.from_markup(
@@ -64,23 +125,34 @@ class CliRenderer:
             "[bold]Mode[/bold]     [green]interactive cli[/green]"
         )
 
-    def _build_banner(self, session_id: str, model_name: str, stage: int) -> Align:
+    def _build_logo_block(self, stage: int):
+        logo = self._build_echo_logo() if stage >= 1 else Text("")
+        return Padding(Align.center(logo), (1, 0, 1, 0))
+
+    def _build_right_block(self, session_id: str, model_name: str, stage: int):
         parts: list[object] = []
-        if stage >= 1:
-            parts.append(self._build_bot_mark())
         if stage >= 2:
-            parts.append(self._build_logo())
+            parts.append(self._build_wordmark())
         if stage >= 3:
+            parts.append(Text(""))
             parts.append(self._build_signature())
         if stage >= 4:
             parts.append(self._build_meta(session_id, model_name))
         body = Group(*parts) if parts else Text("")
+        return Padding(body, (1, 0, 1, 0))
+
+    def _build_banner_content(self, session_id: str, model_name: str, stage: int) -> Columns:
+        left = self._build_logo_block(stage)
+        right = self._build_right_block(session_id, model_name, stage)
+        return Columns([left, right], expand=True, equal=True, padding=(0, 2))
+
+    def _build_banner(self, session_id: str, model_name: str, stage: int) -> Align:
         return Align.center(
             Panel(
-                Padding(body, (0, 1)),
-                title="[bold white]LabAgent[/bold white]",
-                subtitle="[dim]local coding runtime[/dim]",
-                border_style="bright_blue",
+                Padding(self._build_banner_content(session_id, model_name, stage), (0, 1)),
+                title='[bold white]LabAgent Boot[/bold white]',
+                subtitle='[dim]local coding runtime[/dim]',
+                border_style='bright_cyan',
             )
         )
 
@@ -91,8 +163,8 @@ class CliRenderer:
             '',
         ]
         for index, model in enumerate(models):
-            pointer = '[bright_white]›[/bright_white]' if index == cursor else ' '
-            circle = '[blue]●[/blue]' if index == selected else '[dim]○[/dim]'
+            pointer = '[bright_white]>[/bright_white]' if index == cursor else ' '
+            circle = '[blue]*[/blue]' if index == selected else '[dim]o[/dim]'
             style_open = '[bold white]' if index == cursor else ''
             style_close = '[/bold white]' if index == cursor else ''
             rows.append(f'{pointer} {circle} {style_open}{model}{style_close}')
@@ -156,17 +228,29 @@ class CliRenderer:
                 if delay:
                     time.sleep(delay)
         self.console.print(self._build_banner(session_id, model_name, 4))
-        self.console.print(Rule(style="dim blue"))
-        self.console.print("[dim]输入 `/exit` 退出，输入 `/help` 查看说明，输入 `/models` 切换模型。[/dim]")
+        self.console.print(Rule(style='dim blue'))
+        self.console.print('[dim]输入 `/exit` 退出，输入 `/help` 查看说明，输入 `/models` 切换模型，输入 `/skills` 查看可用 skills。[/dim]')
 
     def print_help(self) -> None:
         self.console.print(
             Panel.fit(
-                '/exit  退出\n/help  显示帮助\n/session  显示当前 session id\n/models  交互式切换模型',
+                '/exit  退出\n/help  显示帮助\n/session  显示当前 session id\n/models  交互式切换模型\n/skills  显示当前可用 skills',
                 title='Commands',
                 border_style='green',
             )
         )
+
+    def print_skills(self, skills: list[object]) -> None:
+        if not skills:
+            self.console.print(Panel.fit('No skills available.', title='Skills', border_style='yellow'))
+            return
+        lines: list[str] = []
+        for skill in skills:
+            lines.append(f"[bold cyan]{skill.name}[/bold cyan]")
+            lines.append(f"  {skill.description}")
+            lines.append(f"  [dim]{skill.location}[/dim]")
+            lines.append('')
+        self.console.print(Panel('\n'.join(lines[:-1]), title='Skills', border_style='bright_blue'))
 
     def render_event(self, event: dict) -> None:
         event_type = event.get('type')

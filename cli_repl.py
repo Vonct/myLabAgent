@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from typing import Any, Callable
 
@@ -47,6 +47,11 @@ class CliRepl:
         self.agent, self.supports_thinking = self.on_model_switch(selected_model)
         self.renderer.print_model_switched(selected_model)
 
+    def _handle_skills_command(self) -> None:
+        skill_loader = getattr(self.agent, 'skill_loader', None)
+        skills = skill_loader.all() if skill_loader is not None else []
+        self.renderer.print_skills(skills)
+
     def run(self) -> int:
         self.renderer.print_banner(self.session_id, getattr(self.agent, 'llm_model', 'unknown'))
         while True:
@@ -68,6 +73,9 @@ class CliRepl:
                 continue
             if user_text == '/models':
                 self._handle_models_command()
+                continue
+            if user_text == '/skills':
+                self._handle_skills_command()
                 continue
 
             self.renderer.print_user(user_text)

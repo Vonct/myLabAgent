@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
 import os
@@ -98,31 +98,61 @@ class LabAgent:
             f"Token 消耗：输入 {usage['input_tokens']}，输出 {usage['output_tokens']}，总计 {usage['total_tokens']}"
         )
 
-    def _extract_text(self, message: Any) -> tuple[str, str]:
+
+    def _normalize_content_item(self, item: Any) -> dict[str, Any] | None:
+        if isinstance(item, str):
+            return {'type': 'text', 'text': item}
+        if isinstance(item, dict):
+            return item
+
+        item_type = getattr(item, 'type', None)
+        if item_type == 'image_url':
+            image_url = getattr(item, 'image_url', None)
+            if image_url is not None:
+                url = getattr(image_url, 'url', None)
+                if url:
+                    return {'type': 'image_url', 'image_url': {'url': url}}
+
+        text = getattr(item, 'text', None)
+        if text is not None:
+            return {'type': item_type or 'text', 'text': text}
+        content = getattr(item, 'content', None)
+        if content is not None:
+            return {'type': item_type or 'text', 'content': content}
+        return None
+
+    def _extract_content_payload(self, message: Any) -> tuple[str, list[str], list[dict[str, Any]], str]:
         content = getattr(message, 'content', None)
         reasoning = getattr(message, 'reasoning_content', '') or getattr(message, 'reasoning', '')
 
         final_content = ''
+        image_urls: list[str] = []
+        normalized_content: list[dict[str, Any]] = []
         if isinstance(content, str):
             final_content = content
+            normalized_content = [{'type': 'text', 'text': content}]
         elif isinstance(content, list):
             parts = []
             for item in content:
-                if isinstance(item, str):
-                    parts.append(item)
-                elif isinstance(item, dict):
-                    text = item.get('text') or item.get('content') or ''
-                    if text:
-                        parts.append(text)
-                else:
-                    text = getattr(item, 'text', '') or getattr(item, 'content', '')
-                    if text:
-                        parts.append(text)
+                normalized_item = self._normalize_content_item(item)
+                if not normalized_item:
+                    continue
+                normalized_content.append(normalized_item)
+                if normalized_item.get('type') == 'image_url':
+                    image_url = normalized_item.get('image_url') or {}
+                    url = image_url.get('url')
+                    if url:
+                        image_urls.append(url)
+                    continue
+                text = normalized_item.get('text') or normalized_item.get('content') or ''
+                if text:
+                    parts.append(text)
             final_content = ''.join(parts)
         elif content is not None:
             final_content = str(content)
+            normalized_content = [{'type': 'text', 'text': final_content}]
 
-        return final_content, str(reasoning) if reasoning else ''
+        return final_content, image_urls, normalized_content, str(reasoning) if reasoning else ''
 
     def _prepare_messages_for_api(self, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
         api_messages: list[dict[str, Any]] = []
@@ -260,7 +290,7 @@ class LabAgent:
             if reasoning_mode and supports_thinking:
                 extra_params['extra_body'] = {'enable_thinking': True}
 
-            response = self._create_completion(full_messages, extra_params) # API CALL
+            response = self._create_completion(full_messages, extra_params)
             total_usage = self._parse_usage(getattr(response, 'usage', None))
             current_msg = response.choices[0].message
             tool_round = 0
@@ -309,7 +339,7 @@ class LabAgent:
                 total_usage = self._merge_usage(total_usage, self._parse_usage(getattr(response, 'usage', None)))
                 current_msg = response.choices[0].message
 
-            final_text, final_reasoning = self._extract_text(current_msg)
+            final_text, final_images, final_content, final_reasoning = self._extract_content_payload(current_msg)
 
             if current_msg.tool_calls and tool_round >= self.max_tool_rounds:
                 full_messages.append(current_msg)
@@ -318,15 +348,33 @@ class LabAgent:
                     ' 如果任务仍未完成，请继续细化提示，或提高工具轮数上限。'
                 )
                 final_text = f'{limit_note}\n\n{final_text}'.strip()
+                if final_content and final_content[0].get('type') == 'text':
+                    original = final_content[0].get('text') or final_content[0].get('content') or ''
+                    final_content[0]['text'] = f'{limit_note}\n\n{original}'.strip()
+                else:
+                    final_content.insert(0, {'type': 'text', 'text': limit_note})
 
             if final_reasoning:
                 yield {'type': 'reasoning', 'content': final_reasoning}
 
-            if not final_text:
-                final_text = '模型本轮没有返回可见文本，请重试或切换模型。'
-            answer = final_text + self._usage_suffix(total_usage)
-            for i in range(0, len(answer), 40):
-                yield {'type': 'answer_chunk', 'content': answer[i:i + 40]}
+            usage_suffix = self._usage_suffix(total_usage)
+            text_for_display = final_text
+            if text_for_display:
+                text_for_display += usage_suffix
+            elif not final_images:
+                text_for_display = '模型本轮没有返回可见文本，请重试或切换模型。' + usage_suffix
+                final_content = [{'type': 'text', 'text': text_for_display}]
+
+            if text_for_display:
+                for i in range(0, len(text_for_display), 40):
+                    yield {'type': 'answer_chunk', 'content': text_for_display[i:i + 40]}
+
+            yield {
+                'type': 'final_message',
+                'content': final_content if final_content else [{'type': 'text', 'text': text_for_display}],
+                'display_content': text_for_display,
+                'images': final_images,
+            }
         except Exception as e:
             if 'timed out' in str(e).lower():
                 message = (
@@ -336,4 +384,3 @@ class LabAgent:
             else:
                 message = str(e)
             yield {'type': 'error', 'content': message}
-

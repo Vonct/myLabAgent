@@ -115,6 +115,54 @@ def _save_chat_image(uploaded_file, chat_upload_dir: Path) -> tuple[str, str]:
     return str(saved_image_path), uploaded_file.name
 
 
+def _render_message_text(message: dict) -> None:
+    display_content = message.get('display_content')
+    if isinstance(display_content, str) and display_content:
+        st.markdown(display_content)
+        return
+
+    content = message.get('content')
+    if isinstance(content, str) and content:
+        st.markdown(content)
+    elif message.get('images'):
+        st.caption('（模型返回了图片）')
+
+
+def _data_url_to_image_bytes(image_url: str):
+    if not isinstance(image_url, str) or not image_url.startswith('data:'):
+        return None
+    try:
+        _, encoded = image_url.split(',', 1)
+    except ValueError:
+        return None
+    try:
+        return base64.b64decode(encoded)
+    except Exception:
+        return None
+
+
+def _render_image_sources(image_sources: list[str]) -> None:
+    for image_source in image_sources:
+        if not image_source:
+            continue
+        image_bytes = _data_url_to_image_bytes(image_source)
+        if image_bytes is not None:
+            st.image(image_bytes, width='stretch')
+        else:
+            st.image(image_source, width='stretch')
+
+
+def _render_message_images(message: dict) -> None:
+    image_path = message.get('image_path')
+    if image_path and Path(image_path).exists():
+        with st.expander('查看图片附件', expanded=False):
+            st.image(image_path, width='stretch')
+
+    images = message.get('images') or []
+    if images:
+        _render_image_sources(images)
+
+
 def _render_chat_toolbar(supports_image_input: bool, supports_thinking: bool) -> bool:
     if not supports_thinking:
         st.session_state.reasoning_mode = False
@@ -155,11 +203,8 @@ def render_chat_tab(
     with message_container:
         for message in st.session_state.messages:
             with st.chat_message(message['role']):
-                st.markdown(message.get('display_content', message['content']))
-                image_path = message.get('image_path')
-                if image_path and Path(image_path).exists():
-                    with st.expander('查看图片附件', expanded=False):
-                        st.image(image_path, width='stretch')
+                _render_message_text(message)
+                _render_message_images(message)
 
     chat_input_key = 'chat_input_main'
     _render_chat_toolbar(supports_image_input=supports_image_input, supports_thinking=supports_thinking)
@@ -220,7 +265,9 @@ def render_chat_tab(
 
             with st.chat_message('assistant'):
                 message_placeholder = st.empty()
+                media_container = st.container()
                 full_response = ''
+                assistant_payload = None
                 thought_container = st.status('Agent 正在处理...', expanded=True)
                 try:
                     is_reasoning_mode = st.session_state.get('reasoning_mode', False) and supports_thinking
@@ -249,6 +296,13 @@ def render_chat_tab(
                         elif chunk_type == 'answer_chunk':
                             full_response += chunk['content']
                             message_placeholder.markdown(full_response + '▌')
+                        elif chunk_type == 'final_message':
+                            assistant_payload = {
+                                'role': 'assistant',
+                                'content': chunk.get('content', full_response),
+                                'display_content': chunk.get('display_content', full_response),
+                                'images': chunk.get('images', []),
+                            }
                         elif chunk_type == 'error':
                             thought_container.update(label='处理失败', state='error')
                             session_store.finish_task(
@@ -259,11 +313,26 @@ def render_chat_tab(
                             )
                             st.error(f"Agent 遇到问题: {chunk['content']}")
                     thought_container.update(label='处理完成', state='complete', expanded=False)
-                    message_placeholder.markdown(full_response)
-                    assistant_message = {'role': 'assistant', 'content': full_response}
-                    st.session_state.messages.append(assistant_message)
-                    session_store.append_message(st.session_state.session_id, assistant_message)
-                    session_store.finish_task(st.session_state.session_id, task_id, full_response)
+                    if assistant_payload is None:
+                        assistant_payload = {
+                            'role': 'assistant',
+                            'content': full_response,
+                            'display_content': full_response,
+                            'images': [],
+                        }
+                    final_display = assistant_payload.get('display_content', '')
+                    if final_display:
+                        message_placeholder.markdown(final_display)
+                    else:
+                        message_placeholder.empty()
+                        if assistant_payload.get('images'):
+                            st.caption('（模型返回了图片）')
+                    with media_container:
+                        _render_message_images(assistant_payload)
+                    st.session_state.messages.append(assistant_payload)
+                    session_store.append_message(st.session_state.session_id, assistant_payload)
+                    task_result = final_display or '（模型返回了图片）'
+                    session_store.finish_task(st.session_state.session_id, task_id, task_result)
                 except Exception as e:
                     session_store.finish_task(st.session_state.session_id, task_id, str(e), status='failed')
                     st.error(f'系统错误: {e}')
