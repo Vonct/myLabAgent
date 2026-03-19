@@ -53,31 +53,61 @@ class LabAgent:
                 description_override=self.skill_loader.build_tool_description() if self.skill_loader else None,
             )
         self.tools = self.tool_registry.get_openai_schemas() if self.tool_registry else []
+        self.response_tools = self._build_response_tools(self.tools)
 
-    def _create_completion(self, messages: list[dict[str, Any]], extra_params: dict[str, Any]):
-        return self.client.chat.completions.create(
-            model=self.llm_model,
-            messages=messages,
-            tools=self.tools,
-            tool_choice='auto',
-            stream=False,
+    def _build_response_tools(self, tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        response_tools: list[dict[str, Any]] = []
+        for tool in tools:
+            if tool.get('type') != 'function':
+                continue
+            function_def = tool.get('function') or {}
+            name = function_def.get('name')
+            if not name:
+                continue
+            response_tools.append(
+                {
+                    'type': 'function',
+                    'name': name,
+                    'description': function_def.get('description', ''),
+                    'parameters': function_def.get('parameters', {}),
+                }
+            )
+        return response_tools
+
+    def _create_response(
+        self,
+        input_items: list[dict[str, Any]],
+        extra_params: dict[str, Any],
+        previous_response_id: str | None = None,
+    ):
+        request_params: dict[str, Any] = {
+            'model': self.llm_model,
+            'input': input_items,
+            'stream': False,
+            'instructions': self.system_prompt,
             **extra_params,
-        )
+        }
+        if self.response_tools:
+            request_params['tools'] = self.response_tools
+            request_params['tool_choice'] = 'auto'
+        if previous_response_id:
+            request_params['previous_response_id'] = previous_response_id
+        return self.client.responses.create(**request_params)
 
     def _parse_usage(self, usage: Any) -> dict[str, int]:
         if usage is None:
             return {'input_tokens': 0, 'output_tokens': 0, 'total_tokens': 0}
         if isinstance(usage, dict):
-            input_tokens = int(usage.get('prompt_tokens', 0))
-            output_tokens = int(usage.get('completion_tokens', 0))
+            input_tokens = int(usage.get('input_tokens', usage.get('prompt_tokens', 0)))
+            output_tokens = int(usage.get('output_tokens', usage.get('completion_tokens', 0)))
             total_tokens = int(usage.get('total_tokens', input_tokens + output_tokens))
             return {
                 'input_tokens': input_tokens,
                 'output_tokens': output_tokens,
                 'total_tokens': total_tokens,
             }
-        input_tokens = int(getattr(usage, 'prompt_tokens', 0) or 0)
-        output_tokens = int(getattr(usage, 'completion_tokens', 0) or 0)
+        input_tokens = int(getattr(usage, 'input_tokens', getattr(usage, 'prompt_tokens', 0)) or 0)
+        output_tokens = int(getattr(usage, 'output_tokens', getattr(usage, 'completion_tokens', 0)) or 0)
         total_tokens = int(getattr(usage, 'total_tokens', input_tokens + output_tokens) or (input_tokens + output_tokens))
         return {
             'input_tokens': input_tokens,
@@ -154,27 +184,120 @@ class LabAgent:
 
         return final_content, image_urls, normalized_content, str(reasoning) if reasoning else ''
 
-    def _prepare_messages_for_api(self, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        api_messages: list[dict[str, Any]] = []
+    def _normalize_input_content(self, content: Any) -> Any:
+        if isinstance(content, list):
+            normalized_items: list[dict[str, Any]] = []
+            for item in content:
+                normalized_item = self._normalize_content_item(item)
+                if normalized_item:
+                    normalized_items.append(normalized_item)
+            return normalized_items
+        return content
+
+    def _prepare_messages_for_responses(self, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        response_input: list[dict[str, Any]] = []
         for message in messages:
             role = message.get('role')
-            if not role:
+            if not role or role == 'system':
                 continue
 
-            api_message = {
+            input_item = {
                 'role': role,
-                'content': message.get('content'),
+                'content': self._normalize_input_content(message.get('content')),
             }
             if role == 'tool':
                 if message.get('tool_call_id'):
-                    api_message['tool_call_id'] = message['tool_call_id']
+                    input_item['tool_call_id'] = message['tool_call_id']
                 if message.get('name'):
-                    api_message['name'] = message['name']
+                    input_item['name'] = message['name']
             elif message.get('name'):
-                api_message['name'] = message['name']
+                input_item['name'] = message['name']
 
-            api_messages.append(api_message)
-        return api_messages
+            response_input.append(input_item)
+        return response_input
+
+    def _get_response_output_items(self, response: Any) -> list[Any]:
+        output = getattr(response, 'output', None)
+        if output is None and isinstance(response, dict):
+            output = response.get('output')
+        return list(output or [])
+
+    def _extract_response_tool_calls(self, response: Any) -> list[dict[str, Any]]:
+        tool_calls: list[dict[str, Any]] = []
+        for item in self._get_response_output_items(response):
+            item_type = getattr(item, 'type', None)
+            if item_type is None and isinstance(item, dict):
+                item_type = item.get('type')
+            if item_type != 'function_call':
+                continue
+            name = getattr(item, 'name', None) if not isinstance(item, dict) else item.get('name')
+            arguments = getattr(item, 'arguments', None) if not isinstance(item, dict) else item.get('arguments')
+            call_id = getattr(item, 'call_id', None) if not isinstance(item, dict) else item.get('call_id')
+            if not name or not call_id:
+                continue
+            tool_calls.append(
+                {
+                    'name': name,
+                    'arguments': arguments or '{}',
+                    'call_id': call_id,
+                }
+            )
+        return tool_calls
+
+    def _extract_reasoning_text(self, response: Any) -> str:
+        reasoning_parts: list[str] = []
+        for item in self._get_response_output_items(response):
+            item_type = getattr(item, 'type', None)
+            if item_type is None and isinstance(item, dict):
+                item_type = item.get('type')
+            if item_type != 'reasoning':
+                continue
+
+            summary = getattr(item, 'summary', None) if not isinstance(item, dict) else item.get('summary')
+            if isinstance(summary, list):
+                for summary_item in summary:
+                    text = getattr(summary_item, 'text', None) if not isinstance(summary_item, dict) else summary_item.get('text')
+                    if text:
+                        reasoning_parts.append(str(text))
+        return '\n'.join(part for part in reasoning_parts if part).strip()
+
+    def _extract_response_payload(self, response: Any) -> tuple[str, list[str], list[dict[str, Any]], str]:
+        final_text = str(getattr(response, 'output_text', '') or '')
+        final_images: list[str] = []
+        final_content: list[dict[str, Any]] = []
+
+        for item in self._get_response_output_items(response):
+            item_type = getattr(item, 'type', None)
+            if item_type is None and isinstance(item, dict):
+                item_type = item.get('type')
+            if item_type != 'message':
+                continue
+
+            content_items = getattr(item, 'content', None) if not isinstance(item, dict) else item.get('content')
+            for content_item in content_items or []:
+                content_type = getattr(content_item, 'type', None)
+                if content_type is None and isinstance(content_item, dict):
+                    content_type = content_item.get('type')
+
+                if content_type == 'output_text':
+                    text = getattr(content_item, 'text', None) if not isinstance(content_item, dict) else content_item.get('text')
+                    if text:
+                        final_content.append({'type': 'text', 'text': str(text)})
+                elif content_type == 'input_text':
+                    text = getattr(content_item, 'text', None) if not isinstance(content_item, dict) else content_item.get('text')
+                    if text:
+                        final_content.append({'type': 'text', 'text': str(text)})
+                elif content_type == 'image_url':
+                    image_url = getattr(content_item, 'image_url', None) if not isinstance(content_item, dict) else content_item.get('image_url')
+                    url = getattr(image_url, 'url', None) if image_url is not None and not isinstance(image_url, dict) else (image_url or {}).get('url')
+                    if url:
+                        final_images.append(str(url))
+                        final_content.append({'type': 'image_url', 'image_url': {'url': str(url)}})
+
+        if not final_content and final_text:
+            final_content = [{'type': 'text', 'text': final_text}]
+
+        return final_text, final_images, final_content, self._extract_reasoning_text(response)
 
     def _resolve_infer_pythons(self, base_dir: Path) -> list[Path]:
         candidates = [Path(sys.executable)]
@@ -283,19 +406,19 @@ class LabAgent:
         session_id: str | None = None,
         task_id: str | None = None,
     ) -> Generator[dict[str, Any], None, None]:
-        full_messages = [{'role': 'system', 'content': self.system_prompt}] + self._prepare_messages_for_api(messages)
+        response_input = self._prepare_messages_for_responses(messages)
 
         try:
             extra_params: dict[str, Any] = {}
             if reasoning_mode and supports_thinking:
                 extra_params['extra_body'] = {'enable_thinking': True}
 
-            response = self._create_completion(full_messages, extra_params)
+            response = self._create_response(response_input, extra_params)
             total_usage = self._parse_usage(getattr(response, 'usage', None))
-            current_msg = response.choices[0].message
+            current_tool_calls = self._extract_response_tool_calls(response)
             tool_round = 0
 
-            while current_msg.tool_calls and tool_round < self.max_tool_rounds:
+            while current_tool_calls and tool_round < self.max_tool_rounds:
                 tool_round += 1
                 if tool_round == 1:
                     thought = '正在分析问题并准备调用工具...'
@@ -303,11 +426,11 @@ class LabAgent:
                     thought = f'正在继续执行第 {tool_round} 轮工具调用...'
                 yield {'type': 'thought', 'content': thought}
 
-                full_messages.append(current_msg)
+                tool_outputs: list[dict[str, Any]] = []
 
-                for tool_call in current_msg.tool_calls:
-                    func_name = tool_call.function.name
-                    args = json.loads(tool_call.function.arguments)
+                for tool_call in current_tool_calls:
+                    func_name = tool_call['name']
+                    args = json.loads(tool_call['arguments'])
                     yield {'type': 'tool_exec', 'tool': func_name, 'input': json.dumps(args, ensure_ascii=False)}
                     tool_output = (
                         self.tool_registry.execute(func_name, args)
@@ -326,23 +449,25 @@ class LabAgent:
                                 'output_preview': tool_output[:400],
                             },
                         )
-                    full_messages.append(
+                    tool_outputs.append(
                         {
-                            'tool_call_id': tool_call.id,
-                            'role': 'tool',
-                            'name': func_name,
-                            'content': tool_output,
+                            'type': 'function_call_output',
+                            'call_id': tool_call['call_id'],
+                            'output': tool_output,
                         }
                     )
 
-                response = self._create_completion(full_messages, extra_params)
+                response = self._create_response(
+                    tool_outputs,
+                    extra_params,
+                    previous_response_id=getattr(response, 'id', None),
+                )
                 total_usage = self._merge_usage(total_usage, self._parse_usage(getattr(response, 'usage', None)))
-                current_msg = response.choices[0].message
+                current_tool_calls = self._extract_response_tool_calls(response)
 
-            final_text, final_images, final_content, final_reasoning = self._extract_content_payload(current_msg)
+            final_text, final_images, final_content, final_reasoning = self._extract_response_payload(response)
 
-            if current_msg.tool_calls and tool_round >= self.max_tool_rounds:
-                full_messages.append(current_msg)
+            if current_tool_calls and tool_round >= self.max_tool_rounds:
                 limit_note = (
                     f'已达到当前代理的最大工具轮数限制（{self.max_tool_rounds} 轮）。'
                     ' 如果任务仍未完成，请继续细化提示，或提高工具轮数上限。'

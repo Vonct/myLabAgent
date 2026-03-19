@@ -4,7 +4,7 @@
 
 ## 1. 项目一句话说明
 
-`myLabAgent` 是一个基于 `OpenAI SDK 兼容接口` 的实验室 Agent 项目，当前同时支持：
+`myLabAgent` 是一个基于 `OpenAI SDK 兼容接口` 的实验室 Agent 项目，当前共享 runtime 已经切换到 `Responses API`，同时支持：
 
 1. `Web` 端交互，基于 `Streamlit`
 2. `CLI` 端交互，基于 `argparse + rich`
@@ -89,9 +89,9 @@
 `LabAgent.chat(...)` 目前是共享 runtime 的主循环，负责：
 
 1. 组装 `system prompt + history messages`
-2. 发起第一次模型请求
-3. 如果模型返回 `tool_calls`，则执行工具并把 `role="tool"` 消息拼回上下文
-4. 如有必要继续下一轮工具调用
+2. 通过 `client.responses.create(...)` 发起第一次模型请求
+3. 如果模型返回 `function_call`，则执行工具并把 `function_call_output` 拼回上下文
+4. 结合 `previous_response_id` 继续下一轮工具调用
 5. 最终以事件流的方式 `yield` 回调用方
 
 当前会产出的事件类型主要有：

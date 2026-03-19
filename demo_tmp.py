@@ -19,16 +19,14 @@ except Exception:
 TOOL_DEFS = [
     {
         "type": "function",
-        "function": {
-            "name": "get_amap_weather",
-            "description": "根据城市名称查询天气",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "city": {"type": "string"}
-                },
-                "required": ["city"]
-            }
+        "name": "get_amap_weather",
+        "description": "根据城市名称查询天气",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "city": {"type": "string"}
+            },
+            "required": ["city"]
         }
     }
 ]
@@ -126,7 +124,6 @@ def build_client() -> OpenAI:
 def run_once(question: str, model: str, adapter: AMapMCPAdapter, enable_thinking: bool) -> str:
     client = build_client()
     messages: List[Dict[str, Any]] = [
-        {"role": "system", "content": "你是一个天气助手。涉及天气时优先调用工具。"},
         {"role": "user", "content": question},
     ]
 
@@ -134,43 +131,41 @@ def run_once(question: str, model: str, adapter: AMapMCPAdapter, enable_thinking
     if enable_thinking:
         extra_params["extra_body"] = {"enable_thinking": True}
 
-    first = client.chat.completions.create(
+    first = client.responses.create(
         model=model,
-        messages=messages,
+        instructions="你是一个天气助手。涉及天气时优先调用工具。",
+        input=messages,
         tools=TOOL_DEFS,
         tool_choice="auto",
         stream=False,
         **extra_params,
     )
-    first_msg = first.choices[0].message
+    tool_calls = [
+        item for item in (getattr(first, "output", None) or [])
+        if getattr(item, "type", None) == "function_call"
+    ]
 
-    if not first_msg.tool_calls:
-        return first_msg.content or ""
+    if not tool_calls:
+        return getattr(first, "output_text", "") or ""
 
-    messages.append(first_msg)
-    for tool_call in first_msg.tool_calls:
-        if tool_call.function.name != "get_amap_weather":
-            tool_output = {"error": f"unknown tool: {tool_call.function.name}"}
+    for tool_call in tool_calls:
+        if tool_call.name != "get_amap_weather":
+            tool_output = {"error": f"unknown tool: {tool_call.name}"}
         else:
-            args = json.loads(tool_call.function.arguments or "{}")
+            args = json.loads(tool_call.arguments or "{}")
             city = args.get("city", "")
             tool_output = adapter.get_weather(city)
-        messages.append(
-            {
-                "tool_call_id": tool_call.id,
-                "role": "tool",
-                "name": tool_call.function.name,
-                "content": json.dumps(tool_output, ensure_ascii=False),
-            }
-        )
+        messages.append({"type": "function_call_output", "call_id": tool_call.call_id, "output": json.dumps(tool_output, ensure_ascii=False)})
 
-    second = client.chat.completions.create(
+    second = client.responses.create(
         model=model,
-        messages=messages,
+        instructions="你是一个天气助手。涉及天气时优先调用工具。",
+        input=messages,
+        previous_response_id=first.id,
         stream=False,
         **extra_params,
     )
-    return second.choices[0].message.content or ""
+    return getattr(second, "output_text", "") or ""
 
 
 def main():

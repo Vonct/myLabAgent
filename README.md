@@ -1,6 +1,6 @@
 ﻿# myLabAgent
 
-`myLabAgent` 是一个基于 `OpenAI SDK 兼容接口` 的实验室 Agent 项目，当前同时支持两种交互入口：
+`myLabAgent` 是一个基于 `OpenAI SDK 兼容接口` 的实验室 Agent 项目，当前主链路已经切换到 `Responses API`，同时支持两种交互入口：
 
 1. `Web`，基于 `Streamlit`
 2. `CLI`，基于 `argparse + rich`
@@ -27,7 +27,7 @@
 
 ### 1. 聊天问答
 - 多轮对话
-- OpenAI 兼容 chat completion 调用
+- OpenAI 兼容 `responses.create(...)` 调用
 - 工具调用闭环
 - 基础任务与 session 持久化
 
