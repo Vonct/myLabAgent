@@ -90,8 +90,8 @@
 
 1. 组装 `system prompt + history messages`
 2. 通过 `client.responses.create(...)` 发起第一次模型请求
-3. 如果模型返回 `function_call`，则执行工具并把 `function_call_output` 拼回上下文
-4. 结合 `previous_response_id` 继续下一轮工具调用
+3. 如果模型返回 `function_call`，则执行工具并把 `function_call` 与 `function_call_output` 追加到本地 conversation
+4. 再把完整 conversation 重新发给模型，继续当前 task 内的工具调用闭环
 5. 最终以事件流的方式 `yield` 回调用方
 
 当前会产出的事件类型主要有：
@@ -127,6 +127,148 @@
   - 负责 `list_sessions`
 
 后续如果要改 session 文件结构，优先改这里，不要散落在 UI 层里硬写 JSON。
+
+### 4.4.1 三层上下文的职责与格式
+
+当前项目里要明确区分三层“上下文”：
+
+1. `st.session_state.messages`
+2. `session_store.messages / session_store.tasks`
+3. 运行时 `context window`（当前 task 内真正发给模型的输入）
+
+#### A. st.session_state.messages
+
+这是 Web 运行时内存中的聊天记录，主要服务于：
+
+- 页面展示
+- 当前页面内多轮对话
+- 将用户消息和 assistant 消息传入共享 runtime
+
+它的格式是“UI message”格式，典型示例：
+
+```python
+{
+    'role': 'assistant',
+    'content': [{'type': 'text', 'text': '上海今天多云，13 度。'}],
+    'display_content': '上海今天多云，13 度。',
+    'images': [],
+}
+```
+
+特点：
+
+- 以 `user / assistant` 为主
+- 包含 `display_content`、`image_path`、`images` 等 UI 字段
+- 不是 OpenAI 原生协议格式
+
+#### B. session_store
+
+`session_store.messages` 基本是 `st.session_state.messages` 的持久化副本。
+
+`session_store.tasks` 则记录每次 prompt 的任务执行轨迹，典型结构：
+
+```python
+{
+    'task_id': '...',
+    'prompt': '北京天气怎么样',
+    'status': 'completed',
+    'tool_events': [
+        {
+            'tool': 'get_amap_weather',
+            'args': {'city': '北京'},
+            'tool_round': 1,
+            'output_preview': '{"city":"北京市","forecasts":[...]}',
+        }
+    ],
+    'result': '北京今天晴，17 度。',
+}
+```
+
+可以把它理解成：
+
+- `messages`：人类可读聊天历史
+- `tasks`：每次 prompt 的执行轨迹和工具调用摘要
+
+#### C. context window
+
+这是当前一次 `agent.chat(...)` 内部真正发给模型的输入，不直接等于 `st.session_state.messages`。
+
+Responses 模式下，运行时会先从历史消息构造基础 conversation：
+
+```python
+[
+    {'role': 'user', 'content': '北京天气整理成网页'},
+    {'role': 'assistant', 'content': [{'type': 'text', 'text': '...旧回答...'}]},
+]
+```
+
+如果当前 task 内发生工具调用，则会继续追加：
+
+```python
+{
+    'type': 'function_call',
+    'name': 'get_amap_weather',
+    'arguments': '{"city":"北京"}',
+    'call_id': 'call_123',
+}
+```
+
+以及：
+
+```python
+{
+    'type': 'function_call_output',
+    'call_id': 'call_123',
+    'output': '{"city":"北京市","forecasts":[...]}',
+}
+```
+
+这一层的关键点：
+
+- 当前 task 内新产生的 tool output 原始内容，会进入当前 `context window`
+- 历史旧轮次保存的 `role="tool"` 消息，不再作为首轮 Responses 输入回放
+- 跨轮时模型主要看到的是历史 `user / assistant` 消息，而不是旧 task 的原始 tool JSON
+
+#### D. 一句话区分
+
+- `st.session_state.messages`：当前页面内存里的聊天记录
+- `session_store.messages`：聊天记录的磁盘副本
+- `session_store.tasks[*]`：每次 prompt 的工具执行轨迹
+- `context window`：当前这一轮真正发给模型的协议化输入
+
+#### E. 与 main 分支旧的 Chat Completions 逻辑对比
+
+`main` 分支旧的 `chat.completions` 实现，本质分层也是一样的：
+
+- `st.session_state.messages / session_store.messages` 主要保存 UI 聊天消息
+- `session_store.tasks[*].tool_events` 保存工具执行轨迹
+- 当前 task 内工具结果通过模型协议继续注入上下文
+
+区别只在于旧版工具回传格式是：
+
+```python
+{
+    'role': 'tool',
+    'tool_call_id': tool_call.id,
+    'name': func_name,
+    'content': tool_output,
+}
+```
+
+而新版 Responses 模式下，当前 task 内工具回传格式是：
+
+```python
+{
+    'type': 'function_call_output',
+    'call_id': call_id,
+    'output': tool_output,
+}
+```
+
+也就是说：
+
+- 分层思想没变
+- 变化的是“当前 task 内工具结果如何继续注入模型上下文”的协议格式
 
 ### 4.5 工具与权限
 

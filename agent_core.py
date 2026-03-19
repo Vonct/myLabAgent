@@ -78,7 +78,6 @@ class LabAgent:
         self,
         input_items: list[dict[str, Any]],
         extra_params: dict[str, Any],
-        previous_response_id: str | None = None,
     ):
         request_params: dict[str, Any] = {
             'model': self.llm_model,
@@ -90,8 +89,6 @@ class LabAgent:
         if self.response_tools:
             request_params['tools'] = self.response_tools
             request_params['tool_choice'] = 'auto'
-        if previous_response_id:
-            request_params['previous_response_id'] = previous_response_id
         return self.client.responses.create(**request_params)
 
     def _parse_usage(self, usage: Any) -> dict[str, int]:
@@ -198,19 +195,14 @@ class LabAgent:
         response_input: list[dict[str, Any]] = []
         for message in messages:
             role = message.get('role')
-            if not role or role == 'system':
+            if not role or role in {'system', 'tool'}:
                 continue
 
             input_item = {
                 'role': role,
                 'content': self._normalize_input_content(message.get('content')),
             }
-            if role == 'tool':
-                if message.get('tool_call_id'):
-                    input_item['tool_call_id'] = message['tool_call_id']
-                if message.get('name'):
-                    input_item['name'] = message['name']
-            elif message.get('name'):
+            if message.get('name'):
                 input_item['name'] = message['name']
 
             response_input.append(input_item)
@@ -243,6 +235,14 @@ class LabAgent:
                 }
             )
         return tool_calls
+
+    def _raise_for_failed_response(self, response: Any) -> None:
+        status = getattr(response, 'status', None)
+        if status != 'failed':
+            return
+        error = getattr(response, 'error', None)
+        message = getattr(error, 'message', None) if error is not None else None
+        raise RuntimeError(str(message or 'Responses API 调用失败。'))
 
     def _extract_reasoning_text(self, response: Any) -> str:
         reasoning_parts: list[str] = []
@@ -282,10 +282,14 @@ class LabAgent:
                 if content_type == 'output_text':
                     text = getattr(content_item, 'text', None) if not isinstance(content_item, dict) else content_item.get('text')
                     if text:
+                        if not final_text:
+                            final_text = str(text)
                         final_content.append({'type': 'text', 'text': str(text)})
                 elif content_type == 'input_text':
                     text = getattr(content_item, 'text', None) if not isinstance(content_item, dict) else content_item.get('text')
                     if text:
+                        if not final_text:
+                            final_text = str(text)
                         final_content.append({'type': 'text', 'text': str(text)})
                 elif content_type == 'image_url':
                     image_url = getattr(content_item, 'image_url', None) if not isinstance(content_item, dict) else content_item.get('image_url')
@@ -406,14 +410,14 @@ class LabAgent:
         session_id: str | None = None,
         task_id: str | None = None,
     ) -> Generator[dict[str, Any], None, None]:
-        response_input = self._prepare_messages_for_responses(messages)
-
+        conversation_items = self._prepare_messages_for_responses(messages)
         try:
             extra_params: dict[str, Any] = {}
             if reasoning_mode and supports_thinking:
                 extra_params['extra_body'] = {'enable_thinking': True}
 
-            response = self._create_response(response_input, extra_params)
+            response = self._create_response(conversation_items, extra_params)
+            self._raise_for_failed_response(response)
             total_usage = self._parse_usage(getattr(response, 'usage', None))
             current_tool_calls = self._extract_response_tool_calls(response)
             tool_round = 0
@@ -449,6 +453,14 @@ class LabAgent:
                                 'output_preview': tool_output[:400],
                             },
                         )
+                    conversation_items.append(
+                        {
+                            'type': 'function_call',
+                            'name': func_name,
+                            'arguments': tool_call['arguments'],
+                            'call_id': tool_call['call_id'],
+                        }
+                    )
                     tool_outputs.append(
                         {
                             'type': 'function_call_output',
@@ -456,12 +468,9 @@ class LabAgent:
                             'output': tool_output,
                         }
                     )
-
-                response = self._create_response(
-                    tool_outputs,
-                    extra_params,
-                    previous_response_id=getattr(response, 'id', None),
-                )
+                conversation_items.extend(tool_outputs)
+                response = self._create_response(conversation_items, extra_params)
+                self._raise_for_failed_response(response)
                 total_usage = self._merge_usage(total_usage, self._parse_usage(getattr(response, 'usage', None)))
                 current_tool_calls = self._extract_response_tool_calls(response)
 
