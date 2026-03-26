@@ -229,12 +229,12 @@ class CliRenderer:
                     time.sleep(delay)
         self.console.print(self._build_banner(session_id, model_name, 4))
         self.console.print(Rule(style='dim blue'))
-        self.console.print('[dim]输入 `/exit` 退出，输入 `/help` 查看说明，输入 `/models` 切换模型，输入 `/skills` 查看可用 skills。[/dim]')
+        self.console.print('[dim]输入 `/exit` 退出，输入 `/help` 查看说明，输入 `/models` 切换模型，输入 `/skills` 查看可用 skills，输入 `/add2lib <pdf路径>` 导入知识库。[/dim]')
 
     def print_help(self) -> None:
         self.console.print(
             Panel.fit(
-                '/exit  退出\n/help  显示帮助\n/session  显示当前 session id\n/models  交互式切换模型\n/skills  显示当前可用 skills',
+                '/exit  退出\n/help  显示帮助\n/session  显示当前 session id\n/models  交互式切换模型\n/skills  显示当前可用 skills\n/add2lib <pdf路径>  导入 PDF 到知识库',
                 title='Commands',
                 border_style='green',
             )
@@ -276,6 +276,8 @@ class CliRenderer:
             return
         if event_type == 'error':
             self.console.print(Panel(event.get('content', ''), title='Error', border_style='red'))
+            return
+        if event_type == 'final_message':
             return
         self.console.print(Text(str(event)))
 

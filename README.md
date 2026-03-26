@@ -127,6 +127,8 @@ python cli.py session-list
 - `/help`
 - `/session`
 - `/models`：从 `vip_config.json` 读取可选模型，方向键移动，空格选中，回车确认
+- `/skills`
+- `/add2lib <pdf路径>`：把本地 PDF 按和 Web 端一致的流程导入知识库
 - `/exit`
 
 CLI 支持的常用参数：

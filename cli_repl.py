@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import shlex
+from io import BytesIO
+from pathlib import Path
 from typing import Any, Callable
 
 from cli_render import CliRenderer
@@ -29,6 +32,62 @@ class CliRepl:
         self.supports_thinking = supports_thinking
         self.model_options = model_options or []
         self.on_model_switch = on_model_switch
+
+    def _handle_add2lib_command(self, user_text: str) -> None:
+        try:
+            parts = shlex.split(user_text)
+        except ValueError as exc:
+            self.renderer.print_markdown(f'`/add2lib` 参数解析失败：{exc}')
+            return
+
+        if len(parts) < 2:
+            self.renderer.print_markdown('用法：`/add2lib <pdf路径>`')
+            return
+
+        raw_path = parts[1]
+        file_path = Path(raw_path).expanduser()
+        if not file_path.is_absolute():
+            file_path = Path.cwd() / file_path
+        file_path = file_path.resolve()
+
+        if not file_path.exists():
+            self.renderer.print_markdown(f'文件不存在：`{file_path}`')
+            return
+        if not file_path.is_file():
+            self.renderer.print_markdown(f'目标不是文件：`{file_path}`')
+            return
+        if file_path.suffix.lower() != '.pdf':
+            self.renderer.print_markdown('当前 `/add2lib` 与 web 端保持一致，只支持 `PDF` 文件。')
+            return
+
+        rag_engine = getattr(self.agent, 'rag', None)
+        if rag_engine is None:
+            self.renderer.print_markdown('当前 runtime 未初始化知识库引擎。')
+            return
+
+        self.renderer.print_markdown(f'正在入库：`{file_path}`')
+        try:
+            with open(file_path, 'rb') as f:
+                result = rag_engine.process_file(BytesIO(f.read()), file_path.name)
+        except Exception as exc:
+            self.renderer.print_markdown(f'读取文件失败：`{exc}`')
+            return
+
+        usage = rag_engine.get_embedding_usage()
+        backend = getattr(rag_engine, 'backend', 'unknown')
+        backend_runtime_error = getattr(rag_engine, 'backend_runtime_error', '')
+        lines = [
+            result,
+            f'RAG backend: `{backend}`',
+            (
+                f"Embedding tokens: 本次输入 {usage['last']['input_tokens']}，"
+                f"本次总计 {usage['last']['total_tokens']}；"
+                f"累计输入 {usage['total']['input_tokens']}，累计总计 {usage['total']['total_tokens']}"
+            ),
+        ]
+        if backend_runtime_error:
+            lines.append(f'RAG runtime fallback: `{backend_runtime_error}`')
+        self.renderer.print_markdown('\n\n'.join(lines))
 
     def _handle_models_command(self) -> None:
         if not self.model_options:
@@ -76,6 +135,9 @@ class CliRepl:
                 continue
             if user_text == '/skills':
                 self._handle_skills_command()
+                continue
+            if user_text.startswith('/add2lib'):
+                self._handle_add2lib_command(user_text)
                 continue
 
             self.renderer.print_user(user_text)

@@ -78,6 +78,7 @@ class LabAgent:
         self,
         input_items: list[dict[str, Any]],
         extra_params: dict[str, Any],
+        previous_response_id: str | None = None,
     ):
         request_params: dict[str, Any] = {
             'model': self.llm_model,
@@ -86,10 +87,18 @@ class LabAgent:
             'instructions': self.system_prompt,
             **extra_params,
         }
+        if previous_response_id:
+            request_params['previous_response_id'] = previous_response_id
         if self.response_tools:
             request_params['tools'] = self.response_tools
             request_params['tool_choice'] = 'auto'
         return self.client.responses.create(**request_params)
+
+    def _get_response_id(self, response: Any) -> str:
+        response_id = getattr(response, 'id', None)
+        if response_id is None and isinstance(response, dict):
+            response_id = response.get('id')
+        return str(response_id or '')
 
     def _parse_usage(self, usage: Any) -> dict[str, int]:
         if usage is None:
@@ -418,6 +427,7 @@ class LabAgent:
 
             response = self._create_response(conversation_items, extra_params)
             self._raise_for_failed_response(response)
+            previous_response_id = self._get_response_id(response)
             total_usage = self._parse_usage(getattr(response, 'usage', None))
             current_tool_calls = self._extract_response_tool_calls(response)
             tool_round = 0
@@ -453,14 +463,6 @@ class LabAgent:
                                 'output_preview': tool_output[:400],
                             },
                         )
-                    conversation_items.append(
-                        {
-                            'type': 'function_call',
-                            'name': func_name,
-                            'arguments': tool_call['arguments'],
-                            'call_id': tool_call['call_id'],
-                        }
-                    )
                     tool_outputs.append(
                         {
                             'type': 'function_call_output',
@@ -468,9 +470,28 @@ class LabAgent:
                             'output': tool_output,
                         }
                     )
-                conversation_items.extend(tool_outputs)
-                response = self._create_response(conversation_items, extra_params)
+                # Prefer server-side continuation via previous_response_id.
+                # Fallback to local transcript replay if response id is unavailable.
+                if previous_response_id:
+                    response = self._create_response(
+                        tool_outputs,
+                        extra_params,
+                        previous_response_id=previous_response_id,
+                    )
+                else:
+                    for tool_call in current_tool_calls:
+                        conversation_items.append(
+                            {
+                                'type': 'function_call',
+                                'name': tool_call['name'],
+                                'arguments': tool_call['arguments'],
+                                'call_id': tool_call['call_id'],
+                            }
+                        )
+                    conversation_items.extend(tool_outputs)
+                    response = self._create_response(conversation_items, extra_params)
                 self._raise_for_failed_response(response)
+                previous_response_id = self._get_response_id(response)
                 total_usage = self._merge_usage(total_usage, self._parse_usage(getattr(response, 'usage', None)))
                 current_tool_calls = self._extract_response_tool_calls(response)
 

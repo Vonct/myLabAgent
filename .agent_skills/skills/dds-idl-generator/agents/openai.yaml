@@ -1,0 +1,4 @@
+interface:
+  display_name: "DDS IDL Generator"
+  short_description: "Generate DDS IDL schemas from natural language"
+  default_prompt: "Use $dds-idl-generator to turn this DDS message description into IDL."

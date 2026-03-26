@@ -2,6 +2,8 @@ import asyncio
 import json
 import os
 import shlex
+import urllib.parse
+import urllib.request
 from typing import Any
 
 try:
@@ -83,6 +85,41 @@ class AMapMCPAdapter:
                 return {"text": merged_text, "source": "amap_mcp"}
         return {"content": str(getattr(result, "content", "")), "source": "amap_mcp"}
 
+    def _get_weather_via_http(self, city: str) -> dict[str, Any]:
+        api_key = os.environ.get("AMAP_MAPS_API_KEY", "").strip()
+        if not api_key:
+            raise RuntimeError("缺少 AMAP_MAPS_API_KEY，无法通过 HTTP 查询天气")
+        params = urllib.parse.urlencode(
+            {
+                "key": api_key,
+                "city": city,
+                "extensions": "base",
+                "output": "json",
+            }
+        )
+        url = f"https://restapi.amap.com/v3/weather/weatherInfo?{params}"
+        request = urllib.request.Request(url, headers={"User-Agent": "LabAgent/1.0"})
+        with urllib.request.urlopen(request, timeout=12) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+        status = str(payload.get("status", "0"))
+        if status != "1":
+            info = payload.get("info", "高德天气 API 返回失败")
+            raise RuntimeError(str(info))
+        lives = payload.get("lives", [])
+        if not lives:
+            raise RuntimeError("高德天气 API 未返回天气数据")
+        live = lives[0] if isinstance(lives[0], dict) else {}
+        return {
+            "city": live.get("city") or city,
+            "weather": live.get("weather", ""),
+            "temperature": live.get("temperature", ""),
+            "winddirection": live.get("winddirection", ""),
+            "windpower": live.get("windpower", ""),
+            "humidity": live.get("humidity", ""),
+            "reporttime": live.get("reporttime", ""),
+            "source": "amap_http",
+        }
+
     def get_weather(self, city: str) -> dict[str, Any]:
         if self.mode == "mock":
             return {
@@ -93,7 +130,15 @@ class AMapMCPAdapter:
                 "windpower": "3",
                 "source": "mock_amap_mcp",
             }
-        return asyncio.run(self._get_weather_from_mcp(city))
+        if self.mode == "http":
+            return self._get_weather_via_http(city)
+        if self.mode != "mcp":
+            raise RuntimeError(f"未知天气模式: {self.mode}")
+        try:
+            return asyncio.run(self._get_weather_from_mcp(city))
+        except FileNotFoundError:
+            # e.g. local env has no `npx`; fallback to direct weather HTTP API.
+            return self._get_weather_via_http(city)
 
     def list_tools(self) -> list[dict[str, Any]]:
         return asyncio.run(self._list_tools_from_mcp())

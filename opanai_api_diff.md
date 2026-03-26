@@ -357,17 +357,17 @@ r2 = client.responses.create(
 
 ### 10.3 当前项目的做法
 
-当前项目不是“完全依赖 `previous_response_id`”，而是混合模式：
+当前项目是“优先 `previous_response_id` + 本地回退”的混合模式：
 
 - 长期会话历史仍由本地 `st.session_state.messages` 和 `session_store` 管理
-- 一次 `agent.chat(...)` 内部如果出现多轮工具调用，再用 `previous_response_id` 续接
+- 一次 `agent.chat(...)` 内部出现多轮工具调用时，优先使用 `previous_response_id` 续接
+- 如果兼容层返回里拿不到 `response.id`，回退到本地 transcript 重放（把必要 typed items 再次放进 `input`）
 
 这意味着：
 
-- 产品级会话控制权还在本地
-- 单轮工具调用链由 `Responses` 帮忙续接
-
-这是一个比较稳的方案。
+- 产品级会话控制权仍在本地
+- 工具链路优先由 `Responses` 服务端 continuation 维护
+- 遇到兼容层差异时仍有可用兜底
 
 ## 11. instructions 为什么仍然要每轮显式传
 
@@ -401,12 +401,13 @@ client.responses.create(
 
 1. 跳过 `system`
    - 因为系统提示现在放在 `instructions`
-2. 保留 `user / assistant / tool` 这些历史消息
+2. 保留 `user / assistant` 历史消息，跳过 `tool`
+   - 工具结果续接使用 `function_call_output` typed item，而不是把 `role="tool"` 回传给 `Responses API`
 3. 规范化 `content`
    - 兼容纯文本
    - 兼容图片 + 文本数组
 
-所以这个函数的职责是“整理历史消息”，不是“构造工具续接 typed item”。
+所以这个函数的职责是“整理用户/助手历史消息”，不是“构造工具续接 typed item”。
 
 ## 13. 为什么有时工具都跑完了，但最后没返回文本
 
