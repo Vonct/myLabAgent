@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -15,6 +16,14 @@ from core.skill_loader import SkillLoader
 from core.tool_registry import ToolRegistry
 from rag_engine import RAGEngine
 
+SHELL_COMMAND_BLOCKLIST = (
+    'rm -rf /',
+    'sudo',
+    'shutdown',
+    'reboot',
+    '> /dev/',
+)
+
 
 class LabAgent:
     def __init__(
@@ -27,6 +36,9 @@ class LabAgent:
         system_prompt: str = '',
         skill_loader: SkillLoader | None = None,
         max_tool_rounds: int = 4,
+        project_root: Path | None = None,
+        enable_subagent: bool = True,
+        extra_body_for_thinking: dict[str, Any] | None = None,
     ):
         request_timeout = float(os.environ.get('LABCHAT_REQUEST_TIMEOUT', '180'))
         self.client = OpenAI(api_key=api_key, base_url=base_url, timeout=request_timeout)
@@ -41,11 +53,21 @@ class LabAgent:
         self.system_prompt = system_prompt.replace('当前 LLM 模型名称', self.llm_model)
         self.tool_registry = tool_registry
         self.skill_loader = skill_loader
+        self.project_root = (project_root or Path(__file__).parent).resolve()
         self.max_tool_rounds = max(1, int(max_tool_rounds))
+        self.enable_subagent = enable_subagent
+        self.extra_body_for_thinking = (
+            dict(extra_body_for_thinking) if isinstance(extra_body_for_thinking, dict) else None
+        )
         if self.tool_registry is not None:
             self.tool_registry.register('retrieve_document', self._run_retrieve_document, PermissionLevel.READ_ONLY)
             self.tool_registry.register('recognize_handwritten_digit', self._run_digit_inference, PermissionLevel.EXEC)
             self.tool_registry.register('get_amap_weather', self._run_weather_query, PermissionLevel.NETWORK)
+            self.tool_registry.register('read_file', self._run_read_file, PermissionLevel.READ_ONLY)
+            self.tool_registry.register('grep_search', self._run_grep_search, PermissionLevel.READ_ONLY)
+            self.tool_registry.register('run_shell_command', self._run_shell_command, PermissionLevel.EXEC)
+            if self.enable_subagent:
+                self.tool_registry.register('run_subagent', self._run_subagent, PermissionLevel.READ_ONLY)
             self.tool_registry.register(
                 'load_skill',
                 self._run_load_skill,
@@ -54,6 +76,11 @@ class LabAgent:
             )
         self.tools = self.tool_registry.get_openai_schemas() if self.tool_registry else []
         self.response_tools = self._build_response_tools(self.tools)
+
+    def _resolve_reasoning_extra_body(self) -> dict[str, Any]:
+        if self.extra_body_for_thinking:
+            return dict(self.extra_body_for_thinking)
+        return {'enable_thinking': True}
 
     def _build_response_tools(self, tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
         response_tools: list[dict[str, Any]] = []
@@ -74,23 +101,29 @@ class LabAgent:
             )
         return response_tools
 
+    def _build_subagent_response_tools(self) -> list[dict[str, Any]]:
+        return [tool for tool in self.response_tools if tool.get('name') != 'run_subagent']
+
     def _create_response(
         self,
         input_items: list[dict[str, Any]],
         extra_params: dict[str, Any],
         previous_response_id: str | None = None,
+        tools_override: list[dict[str, Any]] | None = None,
+        instructions_override: str | None = None,
     ):
         request_params: dict[str, Any] = {
             'model': self.llm_model,
             'input': input_items,
             'stream': False,
-            'instructions': self.system_prompt,
+            'instructions': instructions_override or self.system_prompt,
             **extra_params,
         }
         if previous_response_id:
             request_params['previous_response_id'] = previous_response_id
-        if self.response_tools:
-            request_params['tools'] = self.response_tools
+        active_tools = self.response_tools if tools_override is None else tools_override
+        if active_tools:
+            request_params['tools'] = active_tools
             request_params['tool_choice'] = 'auto'
         return self.client.responses.create(**request_params)
 
@@ -408,7 +441,227 @@ class LabAgent:
         if self.skill_loader is None:
             return json.dumps({'error': 'Skill loader unavailable'}, ensure_ascii=False)
         name = str(args.get('name', '')).strip()
-        return self.skill_loader.render_skill_content(name)
+        requested_path = str(args.get('path', '')).strip() or None
+        return self.skill_loader.render_skill_content(name, path=requested_path)
+
+    def _resolve_project_path(self, path_value: str) -> Path:
+        candidate = Path(path_value)
+        target = candidate if candidate.is_absolute() else (self.project_root / candidate)
+        target = target.resolve()
+        if not str(target).startswith(str(self.project_root)):
+            raise ValueError('Path is outside project root.')
+        return target
+
+    def _run_read_file(self, args: dict[str, Any]) -> str:
+        path_value = str(args.get('path', '')).strip()
+        if not path_value:
+            return json.dumps({'error': 'Missing required argument: path'}, ensure_ascii=False)
+        max_chars = max(200, min(50000, int(args.get('max_chars', 12000))))
+        try:
+            target = self._resolve_project_path(path_value)
+        except ValueError as e:
+            return json.dumps({'error': str(e)}, ensure_ascii=False)
+        if not target.exists():
+            return json.dumps({'error': f'File not found: {target}'}, ensure_ascii=False)
+        if target.is_dir():
+            return json.dumps({'error': f'Path is a directory: {target}'}, ensure_ascii=False)
+        content = target.read_text(encoding='utf-8', errors='replace')
+        truncated = len(content) > max_chars
+        if truncated:
+            content = content[:max_chars]
+        return json.dumps(
+            {
+                'path': str(target),
+                'truncated': truncated,
+                'content': content,
+            },
+            ensure_ascii=False,
+        )
+
+    def _run_grep_search(self, args: dict[str, Any]) -> str:
+        query = str(args.get('query', '')).strip()
+        if not query:
+            return json.dumps({'error': 'Missing required argument: query'}, ensure_ascii=False)
+        search_path_arg = str(args.get('path', '.')).strip() or '.'
+        max_results = max(1, min(1000, int(args.get('max_results', 100))))
+        try:
+            search_path = self._resolve_project_path(search_path_arg)
+        except ValueError as e:
+            return json.dumps({'error': str(e)}, ensure_ascii=False)
+        if not search_path.exists():
+            return json.dumps({'error': f'Search path not found: {search_path}'}, ensure_ascii=False)
+
+        rg_cmd = ['rg', '-n', '--no-heading', '--color', 'never', query, str(search_path)]
+        fallback_cmd = ['grep', '-R', '-n', query, str(search_path)]
+        cmd = rg_cmd if shutil.which('rg') else fallback_cmd
+        proc = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='replace')
+        lines = [line for line in proc.stdout.splitlines() if line.strip()]
+        limited = lines[:max_results]
+        return json.dumps(
+            {
+                'query': query,
+                'path': str(search_path),
+                'count': len(lines),
+                'truncated': len(lines) > len(limited),
+                'matches': limited,
+            },
+            ensure_ascii=False,
+        )
+
+    def _run_shell_command(self, args: dict[str, Any]) -> str:
+        command = str(args.get('command', '')).strip()
+        if not command:
+            return json.dumps({'error': 'Missing required argument: command'}, ensure_ascii=False)
+        blocked_token = next((token for token in SHELL_COMMAND_BLOCKLIST if token in command), None)
+        if blocked_token is not None:
+            return json.dumps(
+                {'error': f'Dangerous command blocked by policy: {blocked_token}'},
+                ensure_ascii=False,
+            )
+        cwd_arg = str(args.get('cwd', '.')).strip() or '.'
+        timeout_sec = max(1, min(120, int(args.get('timeout_sec', 20))))
+        try:
+            cwd = self._resolve_project_path(cwd_arg)
+        except ValueError as e:
+            return json.dumps({'error': str(e)}, ensure_ascii=False)
+        if not cwd.exists() or not cwd.is_dir():
+            return json.dumps({'error': f'Invalid cwd: {cwd}'}, ensure_ascii=False)
+
+        try:
+            proc = subprocess.run(
+                ['bash', '-lc', command],
+                cwd=str(cwd),
+                capture_output=True,
+                text=True,
+                encoding='utf-8',
+                errors='replace',
+                timeout=timeout_sec,
+            )
+        except subprocess.TimeoutExpired:
+            return json.dumps(
+                {'error': f'Command timed out after {timeout_sec} seconds.'},
+                ensure_ascii=False,
+            )
+        max_chars = 12000
+        stdout = proc.stdout
+        stderr = proc.stderr
+        if len(stdout) > max_chars:
+            stdout = stdout[:max_chars]
+        if len(stderr) > max_chars:
+            stderr = stderr[:max_chars]
+        return json.dumps(
+            {
+                'command': command,
+                'cwd': str(cwd),
+                'returncode': proc.returncode,
+                'stdout': stdout,
+                'stderr': stderr,
+            },
+            ensure_ascii=False,
+        )
+
+    def _run_subagent(self, args: dict[str, Any]) -> str:
+        prompt = str(args.get('prompt', '')).strip()
+        if not prompt:
+            return json.dumps({'error': 'Missing required argument: prompt'}, ensure_ascii=False)
+
+        description = str(args.get('description', '')).strip() or 'subtask'
+        subagent_system = (
+            f'{self.system_prompt}\n\n'
+            '你现在是一个子代理，运行在全新上下文中。'
+            ' 你与主代理共享同一个项目目录和工具权限，但不会继承主代理的历史对话。'
+            ' 请只围绕当前 prompt 完成一个聚焦子任务。'
+            ' 你可以调用工具做探索、验证和执行，但不要再调用 run_subagent。'
+            ' 完成后只输出简洁总结，包含结论、关键证据和建议下一步。'
+        )
+        subagent_tools = self._build_subagent_response_tools()
+        conversation_items = self._prepare_messages_for_responses(
+            [{'role': 'user', 'content': prompt}]
+        )
+        extra_params: dict[str, Any] = {}
+        max_rounds = max(1, min(8, self.max_tool_rounds + 2))
+
+        try:
+            response = self._create_response(
+                conversation_items,
+                extra_params,
+                tools_override=subagent_tools,
+                instructions_override=subagent_system,
+            )
+            self._raise_for_failed_response(response)
+            previous_response_id = self._get_response_id(response)
+            current_tool_calls = self._extract_response_tool_calls(response)
+            tool_round = 0
+
+            while current_tool_calls and tool_round < max_rounds:
+                tool_round += 1
+                tool_outputs: list[dict[str, Any]] = []
+                for tool_call in current_tool_calls:
+                    func_name = tool_call['name']
+                    tool_args = json.loads(tool_call['arguments'])
+                    tool_output = (
+                        self.tool_registry.execute(func_name, tool_args)
+                        if self.tool_registry
+                        else json.dumps({'error': 'Tool registry unavailable'}, ensure_ascii=False)
+                    )
+                    tool_outputs.append(
+                        {
+                            'type': 'function_call_output',
+                            'call_id': tool_call['call_id'],
+                            'output': tool_output,
+                        }
+                    )
+
+                if previous_response_id:
+                    response = self._create_response(
+                        tool_outputs,
+                        extra_params,
+                        previous_response_id=previous_response_id,
+                        tools_override=subagent_tools,
+                        instructions_override=subagent_system,
+                    )
+                else:
+                    for tool_call in current_tool_calls:
+                        conversation_items.append(
+                            {
+                                'type': 'function_call',
+                                'name': tool_call['name'],
+                                'arguments': tool_call['arguments'],
+                                'call_id': tool_call['call_id'],
+                            }
+                        )
+                    conversation_items.extend(tool_outputs)
+                    response = self._create_response(
+                        conversation_items,
+                        extra_params,
+                        tools_override=subagent_tools,
+                        instructions_override=subagent_system,
+                    )
+                self._raise_for_failed_response(response)
+                previous_response_id = self._get_response_id(response)
+                current_tool_calls = self._extract_response_tool_calls(response)
+
+            final_text, _, _, _ = self._extract_response_payload(response)
+            if current_tool_calls and tool_round >= max_rounds:
+                final_text = f'子代理已达到最大工具轮数限制（{max_rounds}）。\n\n{final_text}'.strip()
+            if not final_text:
+                final_text = '(subagent returned no visible text)'
+
+            return json.dumps(
+                {
+                    'description': description,
+                    'summary': final_text,
+                },
+                ensure_ascii=False,
+            )
+        except Exception as e:
+            return json.dumps(
+                {
+                    'description': description,
+                    'error': f'Subagent failed: {e}',
+                },
+                ensure_ascii=False,
+            )
 
     def chat(
         self,
@@ -423,7 +676,7 @@ class LabAgent:
         try:
             extra_params: dict[str, Any] = {}
             if reasoning_mode and supports_thinking:
-                extra_params['extra_body'] = {'enable_thinking': True}
+                extra_params['extra_body'] = self._resolve_reasoning_extra_body()
 
             response = self._create_response(conversation_items, extra_params)
             self._raise_for_failed_response(response)

@@ -43,6 +43,10 @@
 - `recognize_handwritten_digit`
 - `get_amap_weather`
 - `load_skill`
+- `read_file`
+- `grep_search`
+- `run_shell_command`
+- `run_subagent`
 
 ### 4. Skill 机制
 本地 skill 存放在：

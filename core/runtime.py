@@ -104,6 +104,9 @@ def normalize_model_pool(raw_pool, model_capabilities: dict | None = None) -> di
                 "api_key": model_config.get("api_key", ""),
                 "base_url": model_config.get("base_url", ""),
             }
+            extra_body_for_thinking = model_config.get("extra_body_forThinking")
+            if isinstance(extra_body_for_thinking, dict):
+                item["extra_body_forThinking"] = dict(extra_body_for_thinking)
             if model_capabilities is not None:
                 item.update(resolve_llm_capabilities(model_name, model_capabilities, model_config))
             normalized[model_name] = item

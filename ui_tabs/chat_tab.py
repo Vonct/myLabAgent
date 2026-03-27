@@ -6,6 +6,7 @@ from pathlib import Path
 import streamlit as st
 import streamlit.components.v1 as components
 
+from services.session_service import SessionService
 from services.chat_service import start_task
 
 
@@ -192,6 +193,7 @@ def render_chat_tab(
     has_amap_api_key: bool,
     session_store,
 ):
+    session_service = SessionService(session_store)
     st.title('LabChat Agent')
     st.caption('基于 OpenAI SDK 兼容接口实现，支持 RAG、工具调用、多轮对话与任务持久化。')
     if not chat_ready:
@@ -333,6 +335,26 @@ def render_chat_tab(
                     session_store.append_message(st.session_state.session_id, assistant_payload)
                     task_result = final_display or '（模型返回了图片）'
                     session_store.finish_task(st.session_state.session_id, task_id, task_result)
+                    task_record = session_store.get_task(st.session_state.session_id, task_id) or {}
+                    session_service.append_memory_card(
+                        st.session_state.session_id,
+                        task_id=task_id,
+                        prompt=display_content,
+                        answer=task_result,
+                        tool_events=task_record.get('tool_events', []),
+                        has_image=bool(send_image_path),
+                        status='completed',
+                    )
                 except Exception as e:
                     session_store.finish_task(st.session_state.session_id, task_id, str(e), status='failed')
+                    task_record = session_store.get_task(st.session_state.session_id, task_id) or {}
+                    session_service.append_memory_card(
+                        st.session_state.session_id,
+                        task_id=task_id,
+                        prompt=display_content,
+                        answer=str(e),
+                        tool_events=task_record.get('tool_events', []),
+                        has_image=bool(send_image_path),
+                        status='failed',
+                    )
                     st.error(f'系统错误: {e}')

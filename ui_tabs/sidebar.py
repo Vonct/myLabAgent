@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from io import BytesIO
 from pathlib import Path
 
@@ -34,6 +35,7 @@ def render_sidebar(
         selected_llm_model = ""
         selected_embedding_model = ""
         selected_llm_capabilities = {"supports_image_input": False, "supports_thinking": False}
+        selected_llm_extra_body_for_thinking = None
         effective_llm_api_key = ""
         effective_llm_base_url = default_llm_base_url
         effective_embedding_api_key = ""
@@ -100,6 +102,7 @@ def render_sidebar(
                         model_capabilities,
                         selected_llm_conf,
                     )
+                    selected_llm_extra_body_for_thinking = selected_llm_conf.get("extra_body_forThinking")
                     effective_llm_api_key = selected_llm_conf.get("api_key", "")
                     effective_llm_base_url = selected_llm_conf.get("base_url") or resolve_model_base_url(
                         selected_llm_model,
@@ -137,6 +140,9 @@ def render_sidebar(
             selected_llm_model,
             selected_embedding_model,
             effective_llm_api_key,
+            json.dumps(selected_llm_extra_body_for_thinking, ensure_ascii=False, sort_keys=True)
+            if isinstance(selected_llm_extra_body_for_thinking, dict)
+            else "",
             effective_embedding_base_url,
             effective_embedding_api_key,
         )
@@ -152,6 +158,7 @@ def render_sidebar(
                     effective_llm_api_key,
                     effective_llm_base_url,
                     selected_llm_model,
+                    selected_llm_extra_body_for_thinking,
                     effective_embedding_api_key,
                     effective_embedding_base_url,
                     selected_embedding_model,

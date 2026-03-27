@@ -36,6 +36,7 @@ class SessionStore:
             "updated_at": _utc_now(),
             "messages": [],
             "tasks": [],
+            "memories": [],
         }
         self._write_session(payload)
         return payload
@@ -51,6 +52,7 @@ class SessionStore:
         payload = self.load_session(session_id)
         if payload is None:
             return
+        payload.setdefault("memories", [])
         payload["messages"].append(message)
         payload["updated_at"] = _utc_now()
         self._write_session(payload)
@@ -59,6 +61,7 @@ class SessionStore:
         payload = self.load_session(session_id)
         if payload is None:
             payload = self.create_session()
+        payload.setdefault("memories", [])
         task = TaskRecord(task_id=uuid4().hex, prompt=prompt)
         payload["tasks"].append(task.__dict__)
         payload["updated_at"] = _utc_now()
@@ -69,6 +72,7 @@ class SessionStore:
         payload = self.load_session(session_id)
         if payload is None:
             return
+        payload.setdefault("memories", [])
         for task in payload["tasks"]:
             if task["task_id"] == task_id:
                 task["tool_events"].append(event)
@@ -81,12 +85,31 @@ class SessionStore:
         payload = self.load_session(session_id)
         if payload is None:
             return
+        payload.setdefault("memories", [])
         for task in payload["tasks"]:
             if task["task_id"] == task_id:
                 task["status"] = status
                 task["result"] = result
                 task["updated_at"] = _utc_now()
                 break
+        payload["updated_at"] = _utc_now()
+        self._write_session(payload)
+
+    def get_task(self, session_id: str, task_id: str) -> dict[str, Any] | None:
+        payload = self.load_session(session_id)
+        if payload is None:
+            return None
+        for task in payload.get("tasks", []):
+            if task.get("task_id") == task_id:
+                return task
+        return None
+
+    def append_memory(self, session_id: str, memory: dict[str, Any]) -> None:
+        payload = self.load_session(session_id)
+        if payload is None:
+            return
+        payload.setdefault("memories", [])
+        payload["memories"].append(memory)
         payload["updated_at"] = _utc_now()
         self._write_session(payload)
 

@@ -103,12 +103,43 @@ class SkillLoader:
         lines.append('</available_skills>')
         return '\n'.join(lines)
 
-    # 返回skill正文
-    def render_skill_content(self, name: str) -> str:
+    def _resolve_skill_path(self, skill: SkillInfo, requested_path: str) -> Path:
+        base = skill.directory.resolve()
+        target = (base / requested_path).resolve()
+        if not str(target).startswith(str(base)):
+            raise ValueError('Path escapes skill directory.')
+        return target
+
+    # 返回skill正文或skill内文件内容
+    def render_skill_content(self, name: str, path: str | None = None) -> str:
         skill = self.get(name)
         if skill is None:
             available = ', '.join(item.name for item in self.all()) or 'none'
             return f'{{"error": "Skill `{name}` not found. Available skills: {available}"}}'
+
+        if path:
+            try:
+                target = self._resolve_skill_path(skill, path)
+            except ValueError as e:
+                return f'{{"error": "{e}"}}'
+            if not target.exists():
+                return f'{{"error": "Skill file `{path}` not found."}}'
+            if target.is_dir():
+                return f'{{"error": "Skill path `{path}` is a directory, not a file."}}'
+            content = target.read_text(encoding='utf-8', errors='replace')
+            max_chars = 20000
+            truncated = ''
+            if len(content) > max_chars:
+                content = content[:max_chars]
+                truncated = f'\n\n[truncated to {max_chars} chars]'
+            return '\n'.join(
+                [
+                    f'<skill_file_content name="{skill.name}" path="{path}">',
+                    content,
+                    truncated,
+                    '</skill_file_content>',
+                ]
+            ).rstrip()
 
         files: list[str] = []
         for path in sorted(skill.directory.rglob('*')):

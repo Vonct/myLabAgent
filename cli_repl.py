@@ -146,6 +146,7 @@ class CliRepl:
             task = self.session_store.start_task(self.session_id, user_text)
 
             final_chunks: list[str] = []
+            persisted_assistant_text = ''
             errored = False
             for event in self.agent.chat(
                 messages=messages,
@@ -158,16 +159,41 @@ class CliRepl:
                 self.renderer.render_event(event)
                 if event.get('type') == 'answer_chunk':
                     final_chunks.append(str(event.get('content', '')))
+                elif event.get('type') == 'final_message':
+                    content = event.get('content')
+                    if isinstance(content, list):
+                        text_parts: list[str] = []
+                        for item in content:
+                            if not isinstance(item, dict):
+                                continue
+                            text = item.get('text')
+                            if text is None:
+                                text = item.get('content')
+                            if isinstance(text, str) and text:
+                                text_parts.append(text)
+                        persisted_assistant_text = ''.join(text_parts).strip()
                 elif event.get('type') == 'error':
                     errored = True
 
             self.renderer.finish_answer()
             final_text = ''.join(final_chunks).strip()
-            if final_text:
-                self.session_service.append_assistant_message(self.session_id, final_text)
+            text_to_persist = persisted_assistant_text or final_text
+            if text_to_persist:
+                self.session_service.append_assistant_message(self.session_id, text_to_persist)
+            task_status = 'failed' if errored else 'completed'
             self.session_store.finish_task(
                 self.session_id,
                 task.task_id,
-                final_text,
-                status='failed' if errored else 'completed',
+                text_to_persist,
+                status=task_status,
+            )
+            task_record = self.session_store.get_task(self.session_id, task.task_id) or {}
+            self.session_service.append_memory_card(
+                self.session_id,
+                task_id=task.task_id,
+                prompt=user_text,
+                answer=text_to_persist,
+                tool_events=task_record.get('tool_events', []),
+                has_image=False,
+                status=task_status,
             )

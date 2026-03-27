@@ -55,16 +55,96 @@
     }
   },
   "load_skill": {
-    "description": "加载一个本地 skill 的完整内容。实际暴露给模型的描述会在运行时附带可用 skill 的 name 和 description 列表。",
+    "description": "加载一个本地 skill 的完整内容，或按路径读取该 skill 目录内的 asset/script 文件内容。",
     "parameters": {
       "type": "object",
       "properties": {
         "name": {
           "type": "string",
           "description": "skill 名称，必须从当前可用的 skills 列表中选择。"
+        },
+        "path": {
+          "type": "string",
+          "description": "可选。skill 目录内相对路径，如 assets/few_shots/basic.md 或 scripts/run.sh。传入后返回该文件内容。"
         }
       },
       "required": ["name"]
+    }
+  },
+  "read_file": {
+    "description": "读取项目内单个文件内容（文本），适合按需加载配置、代码或 skill 资产。",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "项目根目录内的文件相对路径，或绝对路径（必须仍在项目目录内）。"
+        },
+        "max_chars": {
+          "type": "integer",
+          "description": "最多返回字符数，默认 12000。"
+        }
+      },
+      "required": ["path"]
+    }
+  },
+  "grep_search": {
+    "description": "在项目目录内搜索文本，返回匹配行（文件:行号:内容）。优先使用 rg。",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string",
+          "description": "搜索关键词或正则。"
+        },
+        "path": {
+          "type": "string",
+          "description": "可选搜索根路径（相对项目根），默认 ."
+        },
+        "max_results": {
+          "type": "integer",
+          "description": "最多返回行数，默认 100。"
+        }
+      },
+      "required": ["query"]
+    }
+  },
+  "run_shell_command": {
+    "description": "在项目目录内执行 shell 命令（bash -lc），用于运行脚本、构建或检查。",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "command": {
+          "type": "string",
+          "description": "要执行的命令。"
+        },
+        "cwd": {
+          "type": "string",
+          "description": "可选工作目录（相对项目根），默认项目根。"
+        },
+        "timeout_sec": {
+          "type": "integer",
+          "description": "超时时间秒，默认 20。"
+        }
+      },
+      "required": ["command"]
+    }
+  },
+  "run_subagent": {
+    "description": "启动一个使用全新上下文的子代理来完成聚焦子任务。适合把探索、重跑、重新检查、独立分析这类工作与主对话隔离。仅当用户明确要求刷新、重跑、重新检查时，再进行刷新 agent；否则优先直接在当前代理继续完成任务。",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "prompt": {
+          "type": "string",
+          "description": "交给子代理的完整任务说明，应该自包含，包含目标、约束和期望输出。"
+        },
+        "description": {
+          "type": "string",
+          "description": "对子任务的简短说明，便于日志展示。"
+        }
+      },
+      "required": ["prompt"]
     }
   }
 }

@@ -6,121 +6,79 @@ description: Generate DDS IDL schema drafts from natural-language requirements. 
 # DDS IDL Generator
 
 Convert natural-language message requirements into stable DDS/XTypes-style IDL drafts.
-Prefer a direct-generation workflow for first-pass productivity: produce clean IDL plus explicit assumptions and warnings, then apply light rule checking mentally before answering.
+Use this skill in two phases: compact rule planning, then generation with targeted few-shots.
 
-## Workflow
+## Core Workflow
 
-Follow this sequence:
+1. Extract schema facts from the request.
+2. Apply conservative DDS/XTypes defaults.
+3. Load 2-4 few-shots from `assets/few_shots/` that best match the request shape.
+4. Generate the output in the requested format.
+5. Surface assumptions and warnings explicitly.
 
-1. Identify the requested artifact.
-   Supported first-class outputs are `module`, `struct`, `enum`, `sequence<T, N>`, `string<N>`, `@key`, `@optional`, and `@appendable`.
+## Few-Shot Routing
 
-2. Extract the schema facts from the request.
-   Look for:
-   - main type names
-   - module or namespace names
-   - field names
-   - enum candidates
-   - list or array constraints
-   - key fields
-   - optional fields
-   - future evolution hints such as "later may add fields"
+When needed, read examples via `load_skill(name="dds-idl-generator", path="assets/few_shots/<file>.md")`.
 
-3. Apply conservative DDS/XTypes defaults.
-   Prefer stable, unsurprising mappings over ambitious modeling.
+Pick by pattern:
 
-4. Generate the IDL directly.
-   Do not force an IR-first architecture unless the user explicitly asks for IR, validation output, or machine-readable intermediate schema.
-
-5. Surface ambiguity explicitly.
-   If a field meaning is unclear, keep the schema conservative and record the assumption or warning instead of pretending certainty.
+- IDs, timestamp, optional numeric fields:
+  - `01_vehicle_location_appendable.md`
+- enum + bounded sequence:
+  - `02_alarm_event_enum_sequence.md`
+- nested struct + key + optional:
+  - `03_device_telemetry_nested.md`
+- bounded strings and explicit key:
+  - `04_robot_heartbeat_bounded.md`
+- missing sequence bound warning:
+  - `05_track_list_unbounded_warning.md`
+- optional fields + appendable evolution:
+  - `06_power_state_optional.md`
+- geometry/pose style nested payload:
+  - `07_pose_with_covariance.md`
+- closed status set with enum and key:
+  - `08_job_status_event.md`
+- arrays represented as bounded sequence:
+  - `09_battery_pack_cells.md`
+- mixed lists with nested element struct:
+  - `10_sensor_snapshot_bundle.md`
 
 ## Default Modeling Rules
 
-Use these defaults unless the user gives a stronger constraint:
-
-- IDs such as `vehicle_id`, `device_id`, `sensor_id`:
-  prefer `string<32>` or `string<64>` rather than unbounded `string`.
-- `timestamp`, `time`, `timestamp_ms`:
-  prefer `uint64`, and assume milliseconds since epoch when not specified.
-- `latitude` and `longitude`:
-  use `double`.
-- common measured values such as speed, heading, angle, confidence, voltage:
-  use `float`.
-- booleans or switches:
-  use `boolean`.
-- categories, modes, or status sets with a closed list:
-  model as `enum`.
-- repeated items with a stated upper bound:
-  use `sequence<T, N>`.
-- repeated items without a bound:
-  use `sequence<T>` and add a warning that no bound was provided.
+- ID-like fields: prefer `string<32>` or `string<64>`.
+- Time fields: prefer `uint64` and assume milliseconds since epoch.
+- Coordinates (`latitude`, `longitude`): use `double`.
+- Typical measured values: use `float`.
+- Boolean switches: use `boolean`.
+- Closed categories: use `enum`.
+- Repeated fields with bound: use `sequence<T, N>`.
+- Repeated fields without bound: use `sequence<T>` and add warning.
 
 ## DDS/XTypes Constraints
-
-Respect these rules in every answer:
 
 - Members are not `@key` by default.
 - Members are not `@optional` by default.
 - A member cannot be both `@key` and `@optional`.
-- Use `@appendable` when the request says the type may gain fields later.
-- Do not introduce `@mutable` or `@final` unless the user clearly asks for strict layout or stronger evolution semantics.
-- Do not introduce `union`, `map`, inheritance, typedefs, or custom annotations unless the user explicitly requests them.
+- Use `@appendable` when evolution is likely.
+- Do not introduce `union`, `map`, inheritance, typedefs, custom annotations unless user requests.
 
 ## Naming Rules
 
-Normalize names when the user does not specify an exact spelling:
-
 - `module`: `lower_snake_case`
 - type names: `PascalCase`
-- members: `snake_case`
+- member names: `snake_case`
 - enum literals: `UPPER_SNAKE_CASE`
-
-Keep user-provided domain terminology when it is already clear and valid.
 
 ## Output Contract
 
-Prefer this response structure when the caller wants a schema draft rather than only raw code:
+If user asks for draft schema output, prefer:
 
 ```json
 {
-  "assumptions": [
-    "vehicle_id is modeled as string<64>",
-    "timestamp is interpreted as milliseconds since epoch"
-  ],
+  "assumptions": [],
   "warnings": [],
-  "idl": "module vehicle { ... }"
+  "idl": "module demo { ... }"
 }
 ```
 
-If the user asks for only the IDL, still apply the same reasoning internally, but keep the final answer compact.
-
-## Example
-
-User request:
-
-```text
-定义一个车辆定位消息，包含车辆ID、经纬度、速度、航向和时间戳。车辆ID是键，速度和航向可能没有。后续可能会增加电池信息。
-```
-
-Preferred result:
-
-```json
-{
-  "assumptions": [
-    "vehicle_id is modeled as string<64>",
-    "timestamp is interpreted as milliseconds since epoch",
-    "future extensibility maps to @appendable"
-  ],
-  "warnings": [],
-  "idl": "module vehicle {\n\n  @appendable\n  struct VehicleLocation {\n    @key string<64> vehicle_id;\n    double latitude;\n    double longitude;\n    @optional float speed;\n    @optional float heading;\n    uint64 timestamp_ms;\n  };\n\n};"
-}
-```
-
-## Style Guidance
-
-- Be decisive when the request is clear.
-- Be conservative when the request is ambiguous.
-- Prefer a useful first draft over exhaustive theory.
-- Mention DDS/XTypes rules only when they materially affect the output.
-- Optimize for schemas that are easy for a human to review and easy for a later validator to check.
+If user asks for only IDL, return only IDL.

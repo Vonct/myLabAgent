@@ -35,6 +35,7 @@ def build_agent_runtime(
     llm_api_key: str,
     llm_base_url: str,
     llm_model: str,
+    llm_extra_body_for_thinking: dict | None,
     embedding_api_key: str,
     embedding_base_url: str,
     embedding_model: str,
@@ -56,5 +57,7 @@ def build_agent_runtime(
         system_prompt=prompt,
         skill_loader=skill_loader,
         max_tool_rounds=max_tool_rounds,
+        project_root=project_root,
+        extra_body_for_thinking=llm_extra_body_for_thinking,
     )
     return rag_engine, agent

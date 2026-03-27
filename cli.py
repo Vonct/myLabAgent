@@ -30,6 +30,10 @@ PRESET_EMBEDDING_BASE_URLS = {
 }
 
 
+def _normalize_extra_body_for_thinking(value: Any) -> dict[str, Any] | None:
+    return dict(value) if isinstance(value, dict) else None
+
+
 def _load_vip_profiles() -> dict[str, dict[str, Any]]:
     if not VIP_CONFIG_PATH.exists():
         return {}
@@ -80,11 +84,13 @@ def _resolve_runtime_config(args, *, llm_model_override: str | None = None) -> d
         raise ValueError('Missing LLM API key. Pass --api-key, set LABAGENT_API_KEY/OPENAI_API_KEY, or configure vip_config.json.')
 
     supports_thinking = bool(profile_llm.get('supports_thinking', MODEL_CAPABILITIES.get(llm_model, {}).get('supports_thinking', False)))
+    extra_body_for_thinking = _normalize_extra_body_for_thinking(profile_llm.get('extra_body_forThinking'))
     available_models = list(profile_llm_pool.keys()) if profile_llm_pool else []
     return {
         'llm_api_key': llm_api_key,
         'llm_base_url': llm_base_url,
         'llm_model': llm_model,
+        'llm_extra_body_for_thinking': extra_body_for_thinking,
         'embedding_api_key': embedding_api_key,
         'embedding_base_url': embedding_base_url,
         'embedding_model': embedding_model,
@@ -113,7 +119,7 @@ def _build_common_parser() -> argparse.ArgumentParser:
 
 
 def _build_agent_from_config(config: dict[str, Any]):
-    _, agent = build_agent_runtime(**{k: config[k] for k in ['llm_api_key', 'llm_base_url', 'llm_model', 'embedding_api_key', 'embedding_base_url', 'embedding_model', 'project_root', 'permission_mode', 'max_tool_rounds']})
+    _, agent = build_agent_runtime(**{k: config[k] for k in ['llm_api_key', 'llm_base_url', 'llm_model', 'llm_extra_body_for_thinking', 'embedding_api_key', 'embedding_base_url', 'embedding_model', 'project_root', 'permission_mode', 'max_tool_rounds']})
     return agent
 
 
@@ -157,6 +163,7 @@ def _run_ask(args) -> int:
     task = SESSION_STORE.start_task(session_id, prompt)
 
     final_chunks: list[str] = []
+    persisted_assistant_text = ''
     errored = False
     for event in agent.chat(
         messages=messages,
@@ -169,14 +176,39 @@ def _run_ask(args) -> int:
         renderer.render_event(event)
         if event.get('type') == 'answer_chunk':
             final_chunks.append(str(event.get('content', '')))
+        elif event.get('type') == 'final_message':
+            content = event.get('content')
+            if isinstance(content, list):
+                text_parts: list[str] = []
+                for item in content:
+                    if not isinstance(item, dict):
+                        continue
+                    text = item.get('text')
+                    if text is None:
+                        text = item.get('content')
+                    if isinstance(text, str) and text:
+                        text_parts.append(text)
+                persisted_assistant_text = ''.join(text_parts).strip()
         elif event.get('type') == 'error':
             errored = True
     renderer.finish_answer()
 
     final_text = ''.join(final_chunks).strip()
-    if final_text:
-        session_service.append_assistant_message(session_id, final_text)
-    SESSION_STORE.finish_task(session_id, task.task_id, final_text, status='failed' if errored else 'completed')
+    text_to_persist = persisted_assistant_text or final_text
+    if text_to_persist:
+        session_service.append_assistant_message(session_id, text_to_persist)
+    task_status = 'failed' if errored else 'completed'
+    SESSION_STORE.finish_task(session_id, task.task_id, text_to_persist, status=task_status)
+    task_record = SESSION_STORE.get_task(session_id, task.task_id) or {}
+    session_service.append_memory_card(
+        session_id,
+        task_id=task.task_id,
+        prompt=prompt,
+        answer=text_to_persist,
+        tool_events=task_record.get('tool_events', []),
+        has_image=False,
+        status=task_status,
+    )
     return 1 if errored else 0
 
 
