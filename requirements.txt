@@ -9,3 +9,5 @@ pillow
 mcp
 rich
 prompt_toolkit
+fastapi
+uvicorn

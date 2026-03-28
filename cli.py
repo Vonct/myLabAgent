@@ -13,7 +13,6 @@ from services.agent_factory import build_agent_runtime
 from services.session_service import SessionService
 
 PROJECT_ROOT = Path(__file__).resolve().parent
-VIP_CONFIG_PATH = PROJECT_ROOT / 'vip_config.json'
 SESSION_STORE = SessionStore(PROJECT_ROOT / 'app_data' / 'sessions')
 MODEL_CAPABILITIES = {
     'qwen3.5-plus': {'supports_thinking': True},
@@ -30,14 +29,70 @@ PRESET_EMBEDDING_BASE_URLS = {
 }
 
 
+def _resolve_worktree_main_repo_root(project_root: Path) -> Path | None:
+    git_path = project_root / '.git'
+    if not git_path.exists() or not git_path.is_file():
+        return None
+    try:
+        raw = git_path.read_text(encoding='utf-8').strip()
+    except OSError:
+        return None
+    prefix = 'gitdir:'
+    if not raw.startswith(prefix):
+        return None
+    gitdir = Path(raw[len(prefix):].strip())
+    if not gitdir.is_absolute():
+        gitdir = (project_root / gitdir).resolve()
+    if gitdir.parent.name == 'worktrees' and gitdir.parent.parent.name == '.git':
+        return gitdir.parent.parent.parent
+    parts = gitdir.parts
+    if 'worktrees' not in parts:
+        return None
+    try:
+        worktrees_index = parts.index('worktrees')
+    except ValueError:
+        return None
+    if worktrees_index >= 1 and parts[worktrees_index - 1] == '.git':
+        return Path(*parts[:worktrees_index - 1])
+    if worktrees_index < 1:
+        return None
+    return Path(*parts[:worktrees_index])
+
+
+def _resolve_vip_config_path() -> Path:
+    candidates: list[Path] = []
+    env_value = os.environ.get('LABAGENT_VIP_CONFIG', '').strip()
+    if env_value:
+        candidates.append(Path(env_value).expanduser())
+    candidates.append(PROJECT_ROOT / 'vip_config.json')
+    candidates.append(Path.cwd() / 'vip_config.json')
+    main_repo_root = _resolve_worktree_main_repo_root(PROJECT_ROOT)
+    if main_repo_root:
+        candidates.append(main_repo_root / 'vip_config.json')
+
+    seen: set[Path] = set()
+    for candidate in candidates:
+        try:
+            resolved = candidate.resolve()
+        except OSError:
+            resolved = candidate
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        if resolved.exists():
+            return resolved
+    return PROJECT_ROOT / 'vip_config.json'
+
+
 def _normalize_extra_body_for_thinking(value: Any) -> dict[str, Any] | None:
     return dict(value) if isinstance(value, dict) else None
 
 
 def _load_vip_profiles() -> dict[str, dict[str, Any]]:
-    if not VIP_CONFIG_PATH.exists():
+    vip_config_path = _resolve_vip_config_path()
+    if not vip_config_path.exists():
         return {}
-    with open(VIP_CONFIG_PATH, 'r', encoding='utf-8') as f:
+    with open(vip_config_path, 'r', encoding='utf-8') as f:
         data = json.load(f)
     users = data.get('users', []) if isinstance(data, dict) else []
     return {item.get('username'): item for item in users if item.get('username')}
@@ -50,15 +105,26 @@ def _pick_profile(profile_name: str | None) -> dict[str, Any] | None:
     if profile_name and profile_name in profiles:
         return profiles[profile_name]
     if profile_name:
-        raise ValueError(f'VIP profile `{profile_name}` not found in {VIP_CONFIG_PATH}')
+        raise ValueError(f'VIP profile `{profile_name}` not found in {_resolve_vip_config_path()}')
     first_key = next(iter(profiles.keys()), None)
     return profiles.get(first_key) if first_key else None
 
 
 def _resolve_runtime_config(args, *, llm_model_override: str | None = None) -> dict[str, Any]:
     profile = _pick_profile(getattr(args, 'profile', None))
-    llm_model = llm_model_override or args.model or os.environ.get('LABAGENT_MODEL') or 'qwen3.5-plus'
-    embedding_model = args.embedding_model or os.environ.get('LABAGENT_EMBEDDING_MODEL') or 'text-embedding-v4'
+    llm_model = (
+        llm_model_override
+        or args.model
+        or os.environ.get('LABAGENT_MODEL')
+        or (profile or {}).get('llm_model')
+        or 'qwen3.5-plus'
+    )
+    embedding_model = (
+        args.embedding_model
+        or os.environ.get('LABAGENT_EMBEDDING_MODEL')
+        or (profile or {}).get('embedding_model')
+        or 'text-embedding-v4'
+    )
 
     profile_llm_pool = (profile or {}).get('llm_models') or {}
     profile_llm = profile_llm_pool.get(llm_model, {})
