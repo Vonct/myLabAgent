@@ -12,6 +12,20 @@ def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _parse_iso_datetime(value: str) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _date_dir_from_created_at(created_at: str) -> str:
+    dt = _parse_iso_datetime(created_at) or datetime.now(timezone.utc)
+    return dt.strftime("%Y_%m_%d")
+
+
 @dataclass
 class TaskRecord:
     task_id: str
@@ -42,7 +56,7 @@ class SessionStore:
         return payload
 
     def load_session(self, session_id: str) -> dict[str, Any] | None:
-        path = self.root / f"{session_id}.json"
+        path = self._resolve_session_path(session_id)
         if not path.exists():
             return None
         with open(path, "r", encoding="utf-8") as f:
@@ -114,6 +128,50 @@ class SessionStore:
         self._write_session(payload)
 
     def _write_session(self, payload: dict[str, Any]) -> None:
-        path = self.root / f"{payload['session_id']}.json"
+        payload.setdefault("memories", [])
+        path = self._resolve_session_path(
+            payload["session_id"],
+            created_at=payload.get("created_at", ""),
+        )
+        path.parent.mkdir(parents=True, exist_ok=True)
         with open(path, "w", encoding="utf-8") as f:
             json.dump(payload, f, ensure_ascii=False, indent=2)
+
+    def _resolve_session_path(self, session_id: str, created_at: str | None = None) -> Path:
+        legacy = self.root / f"{session_id}.json"
+        if legacy.exists():
+            return legacy
+        for path in self.root.glob(f"**/{session_id}.json"):
+            if path.is_file():
+                return path
+        date_dir = _date_dir_from_created_at(created_at or "")
+        return self.root / date_dir / f"{session_id}.json"
+
+    def list_session_paths(self) -> list[Path]:
+        return sorted(
+            [path for path in self.root.glob("**/*.json") if path.is_file()],
+            key=lambda item: item.stat().st_mtime,
+            reverse=True,
+        )
+
+    def migrate_sessions_by_created_date(self) -> int:
+        moved = 0
+        for path in self.root.glob("*.json"):
+            if not path.is_file():
+                continue
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    payload = json.load(f)
+            except Exception:
+                continue
+            session_id = str(payload.get("session_id", "")).strip() or path.stem
+            target = self.root / _date_dir_from_created_at(str(payload.get("created_at", ""))) / f"{session_id}.json"
+            target.parent.mkdir(parents=True, exist_ok=True)
+            if target.resolve() == path.resolve():
+                continue
+            if target.exists():
+                path.unlink()
+            else:
+                path.rename(target)
+            moved += 1
+        return moved

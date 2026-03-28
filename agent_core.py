@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -249,6 +250,61 @@ class LabAgent:
 
             response_input.append(input_item)
         return response_input
+
+    def _latest_user_query(self, messages: list[dict[str, Any]]) -> str:
+        for message in reversed(messages):
+            if message.get('role') != 'user':
+                continue
+            content = message.get('content')
+            if isinstance(content, str):
+                return content.strip()
+            if isinstance(content, list):
+                text_parts: list[str] = []
+                for item in content:
+                    if not isinstance(item, dict):
+                        continue
+                    if item.get('type') == 'text' and isinstance(item.get('text'), str):
+                        text_parts.append(item['text'])
+                return ' '.join(text_parts).strip()
+        return ''
+
+    def _score_memory(self, memory: dict[str, Any], query: str) -> int:
+        summary = str(memory.get('summary', '')).lower()
+        prompt = str(memory.get('prompt', '')).lower()
+        score = 0
+        if query:
+            q = query.lower()
+            if q and (q in summary or q in prompt):
+                score += 10
+            tokens = [t for t in re.split(r'[\W_]+', q) if len(t) >= 2]
+            for token in tokens:
+                if token in summary or token in prompt:
+                    score += 2
+        if memory.get('status') == 'completed':
+            score += 1
+        return score
+
+    def _build_memory_context(self, session_store, session_id: str, messages: list[dict[str, Any]]) -> str:
+        payload = session_store.load_session(session_id) or {}
+        memories = payload.get('memories', [])
+        if not isinstance(memories, list) or not memories:
+            return ''
+        query = self._latest_user_query(messages)
+        ranked = sorted(memories, key=lambda m: self._score_memory(m, query), reverse=True)
+        selected = ranked[:3]
+        lines = ['Previous relevant memory:']
+        for idx, memory in enumerate(selected, start=1):
+            summary = str(memory.get('summary', '')).strip()
+            if not summary:
+                continue
+            lines.append(f'{idx}. {summary}')
+        if len(lines) == 1:
+            return ''
+        return '\n'.join(lines)
+
+    def _is_memory_injection_enabled(self) -> bool:
+        value = os.environ.get('LABAGENT_ENABLE_MEMORY_INJECTION', '1').strip().lower()
+        return value not in {'0', 'false', 'off', 'no'}
 
     def _get_response_output_items(self, response: Any) -> list[Any]:
         output = getattr(response, 'output', None)
@@ -673,6 +729,10 @@ class LabAgent:
         task_id: str | None = None,
     ) -> Generator[dict[str, Any], None, None]:
         conversation_items = self._prepare_messages_for_responses(messages)
+        if self._is_memory_injection_enabled() and session_store and session_id:
+            memory_context = self._build_memory_context(session_store, session_id, messages)
+            if memory_context:
+                conversation_items.insert(0, {'role': 'user', 'content': memory_context})
         try:
             extra_params: dict[str, Any] = {}
             if reasoning_mode and supports_thinking:

@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>城市天气 - Apple 风格</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        :root {
+            --background: 0 0% 100%;
+            --foreground: 0 0% 9%;
+            --muted: 0 0% 96%;
+            --muted-foreground: 0 0% 45%;
+            --accent: 211 100% 50%;
+            --accent-foreground: 0 0% 100%;
+            --border: 0 0% 91%;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', Roboto, sans-serif;
+            background: hsl(var(--background));
+            color: hsl(var(--foreground));
+            line-height: 1.5;
+            min-height: 100vh;
+            padding: 48px 24px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 64px;
+            animation: apple-fade-in 0.6s cubic-bezier(0.4, 0.0, 0.2, 1) forwards;
+        }
+
+        .header h1 {
+            font-size: clamp(2.25rem, 5vw, 3.5rem);
+            font-weight: 600;
+            letter-spacing: -0.025em;
+            margin-bottom: 12px;
+        }
+
+        .header p {
+            font-size: clamp(1rem, 2vw, 1.125rem);
+            color: hsl(var(--muted-foreground));
+        }
+
+        .weather-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 24px;
+        }
+
+        .weather-card {
+            background: rgba(255, 255, 255, 0.8);
+            border: 1px solid hsl(var(--border));
+            border-radius: 16px;
+            padding: 32px;
+            backdrop-filter: blur(20px) saturate(120%);
+            -webkit-backdrop-filter: blur(20px) saturate(120%);
+            box-shadow: 0 1px 3px 0 rgb(0 0 0 / 0.05);
+            transition: all 0.3s cubic-bezier(0.4, 0.0, 0.2, 1);
+            animation: apple-fade-in 0.6s cubic-bezier(0.4, 0.0, 0.2, 1) forwards;
+            opacity: 0;
+        }
+
+        .weather-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 24px 0 rgb(0 0 0 / 0.08);
+        }
+
+        .weather-card:nth-child(1) { animation-delay: 0.1s; }
+        .weather-card:nth-child(2) { animation-delay: 0.15s; }
+        .weather-card:nth-child(3) { animation-delay: 0.2s; }
+        .weather-card:nth-child(4) { animation-delay: 0.25s; }
+        .weather-card:nth-child(5) { animation-delay: 0.3s; }
+
+        .city-name {
+            font-size: clamp(1.25rem, 3vw, 1.5rem);
+            font-weight: 600;
+            letter-spacing: -0.01em;
+            margin-bottom: 8px;
+        }
+
+        .current-weather {
+            display: flex;
+            align-items: baseline;
+            gap: 12px;
+            margin-bottom: 24px;
+        }
+
+        .temperature {
+            font-size: clamp(2.5rem, 5vw, 3.5rem);
+            font-weight: 600;
+            letter-spacing: -0.03em;
+        }
+
+        .weather-condition {
+            font-size: clamp(1rem, 2vw, 1.125rem);
+            color: hsl(var(--muted-foreground));
+        }
+
+        .forecast {
+            border-top: 1px solid hsl(var(--border));
+            padding-top: 20px;
+        }
+
+        .forecast-title {
+            font-size: 0.875rem;
+            font-weight: 600;
+            color: hsl(var(--muted-foreground));
+            margin-bottom: 12px;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .forecast-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 8px 0;
+            font-size: 0.9375rem;
+        }
+
+        .forecast-date {
+            color: hsl(var(--muted-foreground));
+        }
+
+        .forecast-temp {
+            font-weight: 500;
+        }
+
+        .forecast-condition {
+            color: hsl(var(--muted-foreground));
+            font-size: 0.875rem;
+        }
+
+        @keyframes apple-fade-in {
+            from {
+                opacity: 0;
+                transform: translateY(12px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        @media (max-width: 768px) {
+            body {
+                padding: 32px 16px;
+            }
+            
+            .header {
+                margin-bottom: 40px;
+            }
+
+            .weather-card {
+                padding: 24px;
+            }
+        }
+
+        .date-badge {
+            display: inline-block;
+            background: hsl(var(--muted));
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 0.75rem;
+            font-weight: 500;
+            color: hsl(var(--muted-foreground));
+            margin-bottom: 16px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header class="header">
+            <h1>城市天气</h1>
+            <p>实时天气预报 · 2026 年 3 月 28 日</p>
+        </header>
+
+        <div class="weather-grid">
+            <!-- 上海 -->
+            <div class="weather-card">
+                <div class="date-badge">星期六</div>
+                <div class="city-name">上海</div>
+                <div class="current-weather">
+                    <span class="temperature">22°</span>
+                    <span class="weather-condition">阴</span>
+                </div>
+                <div class="forecast">
+                    <div class="forecast-title">未来预报</div>
+                    <div class="forecast-item">
+                        <span class="forecast-date">3/29 周日</span>
+                        <span class="forecast-temp">23° / 14°</span>
+                        <span class="forecast-condition">阴→小雨</span>
+                    </div>
+                    <div class="forecast-item">
+                        <span class="forecast-date">3/30 周一</span>
+                        <span class="forecast-temp">17° / 12°</span>
+                        <span class="forecast-condition">中雨</span>
+                    </div>
+                    <div class="forecast-item">
+                        <span class="forecast-date">3/31 周二</span>
+                        <span class="forecast-temp">17° / 10°</span>
+                        <span class="forecast-condition">小雨</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 深圳 -->
+            <div class="weather-card">
+                <div class="date-badge">星期六</div>
+                <div class="city-name">深圳</div>
+                <div class="current-weather">
+                    <span class="temperature">28°</span>
+                    <span class="weather-condition">阵雨</span>
+                </div>
+                <div class="forecast">
+                    <div class="forecast-title">未来预报</div>
+                    <div class="forecast-item">
+                        <span class="forecast-date">3/29 周日</span>
+                        <span class="forecast-temp">28° / 23°</span>
+                        <span class="forecast-condition">多云</span>
+                    </div>
+                    <div class="forecast-item">
+                        <span class="forecast-date">3/30 周一</span>
+                        <span class="forecast-temp">29° / 23°</span>
+                        <span class="forecast-condition">多云</span>
+                    </div>
+                    <div class="forecast-item">
+                        <span class="forecast-date">3/31 周二</span>
+                        <span class="forecast-temp">28° / 21°</span>
+                        <span class="forecast-condition">雷阵雨</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 广州 -->
+            <div class="weather-card">
+                <div class="date-badge">星期六</div>
+                <div class="city-name">广州</div>
+                <div class="current-weather">
+                    <span class="temperature">27°</span>
+                    <span class="weather-condition">阵雨</span>
+                </div>
+                <div class="forecast">
+                    <div class="forecast-title">未来预报</div>
+                    <div class="forecast-item">
+                        <span class="forecast-date">3/29 周日</span>
+                        <span class="forecast-temp">28° / 23°</span>
+                        <span class="forecast-condition">阵雨→雷阵雨</span>
+                    </div>
+                    <div class="forecast-item">
+                        <span class="forecast-date">3/30 周一</span>
+                        <span class="forecast-temp">30° / 22°</span>
+                        <span class="forecast-condition">雷阵雨</span>
+                    </div>
+                    <div class="forecast-item">
+                        <span class="forecast-date">3/31 周二</span>
+                        <span class="forecast-temp">28° / 16°</span>
+                        <span class="forecast-condition">中雨→大雨</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 北京 -->
+            <div class="weather-card">
+                <div class="date-badge">星期六</div>
+                <div class="city-name">北京</div>
+                <div class="current-weather">
+                    <span class="temperature">21°</span>
+                    <span class="weather-condition">小雨</span>
+                </div>
+                <div class="forecast">
+                    <div class="forecast-title">未来预报</div>
+                    <div class="forecast-item">
+                        <span class="forecast-date">3/29 周日</span>
+                        <span class="forecast-temp">21° / 8°</span>
+                        <span class="forecast-condition">多云</span>
+                    </div>
+                    <div class="forecast-item">
+                        <span class="forecast-date">3/30 周一</span>
+                        <span class="forecast-temp">18° / 7°</span>
+                        <span class="forecast-condition">多云</span>
+                    </div>
+                    <div class="forecast-item">
+                        <span class="forecast-date">3/31 周二</span>
+                        <span class="forecast-temp">20° / 6°</span>
+                        <span class="forecast-condition">晴</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 内蒙古（呼和浩特） -->
+            <div class="weather-card">
+                <div class="date-badge">星期六</div>
+                <div class="city-name">内蒙古</div>
+                <div class="current-weather">
+                    <span class="temperature">11°</span>
+                    <span class="weather-condition">小雨</span>
+                </div>
+                <div class="forecast">
+                    <div class="forecast-title">未来预报</div>
+                    <div class="forecast-item">
+                        <span class="forecast-date">3/29 周日</span>
+                        <span class="forecast-temp">13° / -1°</span>
+                        <span class="forecast-condition">多云</span>
+                    </div>
+                    <div class="forecast-item">
+                        <span class="forecast-date">3/30 周一</span>
+                        <span class="forecast-temp">15° / 1°</span>
+                        <span class="forecast-condition">多云</span>
+                    </div>
+                    <div class="forecast-item">
+                        <span class="forecast-date">3/31 周二</span>
+                        <span class="forecast-temp">16° / 0°</span>
+                        <span class="forecast-condition">晴</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

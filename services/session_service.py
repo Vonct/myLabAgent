@@ -87,7 +87,7 @@ class SessionService:
 
     def list_sessions(self, limit: int = 20) -> list[dict[str, Any]]:
         records: list[dict[str, Any]] = []
-        for path in sorted(self.store.root.glob('*.json'), key=lambda item: item.stat().st_mtime, reverse=True):
+        for path in self.store.list_session_paths():
             payload = self.store.load_session(path.stem)
             if payload is None:
                 continue

@@ -115,7 +115,7 @@ class CliRepl:
         self.renderer.print_banner(self.session_id, getattr(self.agent, 'llm_model', 'unknown'))
         while True:
             try:
-                user_text = input('labagent> ').strip()
+                user_text = self.renderer.read_prompt('labagent> ').strip()
             except (EOFError, KeyboardInterrupt):
                 self.renderer.finish_answer()
                 return 0

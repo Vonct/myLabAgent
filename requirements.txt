@@ -8,3 +8,4 @@ torchvision
 pillow
 mcp
 rich
+prompt_toolkit

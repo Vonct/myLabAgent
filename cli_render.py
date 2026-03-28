@@ -16,6 +16,11 @@ from rich.rule import Rule
 from rich.syntax import Syntax
 from rich.text import Text
 
+try:
+    from prompt_toolkit import PromptSession
+except Exception:  # pragma: no cover - optional dependency fallback
+    PromptSession = None
+
 if os.name == 'nt':
     import msvcrt
 else:
@@ -27,6 +32,14 @@ class CliRenderer:
     def __init__(self, console: Console | None = None):
         self.console = console or Console()
         self._answer_started = False
+        self._prompt_session = PromptSession() if PromptSession is not None else None
+
+    def _truncate_tool_result(self, output: object) -> str:
+        text = str(output or '')
+        if len(text) <= 1200:
+            return text
+        keep_length = min(max(240, int(len(text) * 0.2)), 1200)
+        return text[:keep_length].rstrip() + '\n...'
 
     def _supports_pixel_art(self) -> bool:
         encoding = (getattr(sys.stdout, 'encoding', '') or '').lower()
@@ -194,11 +207,24 @@ class CliRenderer:
         first = sys.stdin.read(1)
         if first == '\x1b':
             second = sys.stdin.read(1)
-            if second != '[':
+            if second not in {'[', 'O'}:
                 return 'escape'
-            third = sys.stdin.read(1)
-            return {'A': 'up', 'B': 'down'}.get(third, '')
+            sequence = ''
+            while True:
+                ch = sys.stdin.read(1)
+                if not ch:
+                    break
+                sequence += ch
+                if ch.isalpha() or ch == '~':
+                    break
+            final = sequence[-1:] if sequence else ''
+            return {'A': 'up', 'B': 'down'}.get(final, '')
         return {' ': 'space', '\r': 'enter', '\n': 'enter'}.get(first, first)
+
+    def _read_char(self) -> str:
+        if os.name == 'nt':
+            return msvcrt.getwch()
+        return sys.stdin.read(1)
 
     def choose_model(self, models: list[str], current_model: str) -> str | None:
         if not models:
@@ -206,8 +232,9 @@ class CliRenderer:
         selected = models.index(current_model) if current_model in models else 0
         cursor = selected
         with self._raw_keyboard():
-            with Live(self._build_model_picker(models, cursor, selected), console=self.console, refresh_per_second=20, transient=True) as live:
+            with self.console.screen(hide_cursor=True):
                 while True:
+                    self.console.print(self._build_model_picker(models, cursor, selected))
                     key = self._read_key()
                     if key == 'up':
                         cursor = (cursor - 1) % len(models)
@@ -219,7 +246,66 @@ class CliRenderer:
                         return models[selected]
                     elif key in {'escape', 'q'}:
                         return None
-                    live.update(self._build_model_picker(models, cursor, selected))
+                    self.console.file.write('\x1b[H\x1b[J')
+                    self.console.file.flush()
+
+    def read_prompt(self, prompt: str = 'labagent> ') -> str:
+        if self._prompt_session is not None:
+            return self._prompt_session.prompt(prompt)
+        buffer: list[str] = []
+        cursor = 0
+        out = self.console.file
+        out.write(prompt)
+        out.flush()
+        with self._raw_keyboard():
+            while True:
+                ch = self._read_char()
+                if ch in {'\r', '\n'}:
+                    out.write('\n')
+                    out.flush()
+                    return ''.join(buffer)
+                if ch == '\x03':
+                    out.write('\n')
+                    out.flush()
+                    raise KeyboardInterrupt
+                if ch == '\x04':
+                    out.write('\n')
+                    out.flush()
+                    raise EOFError
+                if ch in {'\x7f', '\b'}:
+                    if cursor > 0:
+                        cursor -= 1
+                        buffer.pop(cursor)
+                elif ch == '\x1b':
+                    second = self._read_char()
+                    if second in {'[', 'O'}:
+                        third = self._read_char()
+                        if third == 'D' and cursor > 0:
+                            cursor -= 1
+                        elif third == 'C' and cursor < len(buffer):
+                            cursor += 1
+                        elif third.isdigit():
+                            while True:
+                                tail = self._read_char()
+                                if not tail or tail.isalpha() or tail == '~':
+                                    break
+                    else:
+                        continue
+                else:
+                    if ch.isprintable():
+                        buffer.insert(cursor, ch)
+                        cursor += 1
+
+                line = ''.join(buffer)
+                out.write('\r')
+                out.write(prompt)
+                out.write(line)
+                out.write(' ')
+                out.write('\r')
+                out.write(prompt)
+                if cursor > 0:
+                    out.write(line[:cursor])
+                out.flush()
 
     def print_banner(self, session_id: str, model_name: str) -> None:
         with Live(console=self.console, refresh_per_second=30, transient=True) as live:
@@ -265,7 +351,8 @@ class CliRenderer:
             self.console.print(Panel(syntax, title=f"Tool: {event.get('tool', '')}", border_style='cyan'))
             return
         if event_type == 'tool_result':
-            self.console.print(Panel(event.get('output', ''), title='Tool Result', border_style='cyan'))
+            truncated_output = self._truncate_tool_result(event.get('output', ''))
+            self.console.print(Panel(truncated_output, title='Tool Result', border_style='cyan'))
             return
         if event_type == 'answer_chunk':
             content = event.get('content', '')
