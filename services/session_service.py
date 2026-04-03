@@ -25,6 +25,12 @@ class SessionService:
     def append_user_message(self, session_id: str, content: str) -> None:
         self.store.append_message(session_id, {'role': 'user', 'content': content})
 
+    def append_user_message_with_name(self, session_id: str, content: str, name: str | None = None) -> None:
+        message: dict[str, Any] = {'role': 'user', 'content': content}
+        if name:
+            message['name'] = name
+        self.store.append_message(session_id, message)
+
     def append_assistant_message(self, session_id: str, content: str) -> None:
         self.store.append_message(session_id, {'role': 'assistant', 'content': content})
 

@@ -241,12 +241,17 @@ class LabAgent:
             if not role or role in {'system', 'tool'}:
                 continue
 
+            normalized_content = self._normalize_input_content(message.get('content'))
+            speaker_name = str(message.get('name', '')).strip()
+            if speaker_name and isinstance(normalized_content, str):
+                normalized_content = f'[{speaker_name}] {normalized_content}'.strip()
+            elif speaker_name and isinstance(normalized_content, list):
+                normalized_content = [{'type': 'text', 'text': f'[{speaker_name}]'}] + normalized_content
+
             input_item = {
                 'role': role,
-                'content': self._normalize_input_content(message.get('content')),
+                'content': normalized_content,
             }
-            if message.get('name'):
-                input_item['name'] = message['name']
 
             response_input.append(input_item)
         return response_input

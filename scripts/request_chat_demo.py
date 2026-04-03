@@ -1,17 +1,21 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 import urllib.error
 import urllib.request
 
 
-BASE_URL = 'http://127.0.0.1:8000'
+BASE_URL = os.environ.get('LABAGENT_API_BASE_URL', 'http://127.0.0.1:8000').rstrip('/')
+API_TOKEN = os.environ.get('LABAGENT_API_TOKEN', '').strip()
 
 
 def _request(method: str, path: str, payload: dict | None = None) -> dict:
     data = None
     headers = {'Accept': 'application/json'}
+    if API_TOKEN:
+        headers['X-API-Key'] = API_TOKEN
     if payload is not None:
         data = json.dumps(payload).encode('utf-8')
         headers['Content-Type'] = 'application/json'
