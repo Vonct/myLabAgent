@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from cli_render import CliRenderer
+from core.canonical_message import extract_text_from_content
 from services.session_service import SessionService
 
 
@@ -153,7 +154,7 @@ class CliRepl:
             self.renderer.begin_turn(user_text, task.task_id, mode_label='interactive cli')
 
             final_chunks: list[str] = []
-            persisted_assistant_text = ''
+            persisted_assistant_content = None
             errored = False
             for event in self.agent.chat(
                 messages=messages,
@@ -167,24 +168,15 @@ class CliRepl:
                 if event.get('type') == 'answer_chunk':
                     final_chunks.append(str(event.get('content', '')))
                 elif event.get('type') == 'final_message':
-                    content = event.get('content')
-                    if isinstance(content, list):
-                        text_parts: list[str] = []
-                        for item in content:
-                            if not isinstance(item, dict):
-                                continue
-                            text = item.get('text')
-                            if text is None:
-                                text = item.get('content')
-                            if isinstance(text, str) and text:
-                                text_parts.append(text)
-                        persisted_assistant_text = ''.join(text_parts).strip()
+                    persisted_assistant_content = event.get('content')
                 elif event.get('type') == 'error':
                     errored = True
 
             final_text = ''.join(final_chunks).strip()
-            text_to_persist = persisted_assistant_text or final_text
-            if text_to_persist:
+            text_to_persist = extract_text_from_content(persisted_assistant_content) or final_text
+            if persisted_assistant_content is not None:
+                self.session_service.append_assistant_message(self.session_id, persisted_assistant_content)
+            elif text_to_persist:
                 self.session_service.append_assistant_message(self.session_id, text_to_persist)
             task_status = 'failed' if errored else 'completed'
             self.session_store.finish_task(

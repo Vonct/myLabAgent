@@ -16,6 +16,7 @@
 - `agent_core.py`：核心 Agent loop，负责模型调用和 tool-calling 闭环
 - `services/agent_factory.py`：共享 runtime 工厂
 - `services/session_service.py`：session 高层封装
+- `core/canonical_message.py`：canonical message 构造、规范化与展示提取
 - `core/session_store.py`：session JSON 落盘
 - `rag_engine.py`：PDF 解析、切块、embedding、向量检索
 - `core/tool_registry.py`：工具注册与权限检查
@@ -168,7 +169,7 @@ CLI 支持的常用参数：
 session 会保存到：
 
 ```text
-app_data/sessions/<session_id>.json
+app_data/sessions/YYYY_MM_DD/<session_id>.json
 ```
 
 每个 session 文件当前包含：
@@ -177,6 +178,14 @@ app_data/sessions/<session_id>.json
 - `updated_at`
 - `messages`
 - `tasks`
+- `memories`
+
+其中 `messages` 现在保存的是 `canonical message`，而不是 UI 专用消息。也就是说：
+
+- 只保留 `role / content / name` 这类会话语义字段
+- 不再把 `display_content`、`image_path`、`images` 这类展示字段持久化到 session JSON
+- 当前项目的 `messages` 以 `user / assistant` transcript 为主，工具执行轨迹单独放在 `tasks[*].tool_events`
+- Web / CLI 渲染时再根据 canonical content 推导展示文本和图片
 
 ## 权限模型
 

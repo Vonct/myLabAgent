@@ -144,26 +144,38 @@
 - 当前页面内多轮对话
 - 将用户消息和 assistant 消息传入共享 runtime
 
-它的格式是“UI message”格式，典型示例：
+现在这里保存的是 `canonical message`，典型示例：
 
 ```python
 {
     'role': 'assistant',
     'content': [{'type': 'text', 'text': '上海今天多云，13 度。'}],
-    'display_content': '上海今天多云，13 度。',
-    'images': [],
 }
 ```
 
 特点：
 
 - 以 `user / assistant` 为主
-- 包含 `display_content`、`image_path`、`images` 等 UI 字段
-- 不是 OpenAI 原生协议格式
+- `content` 可以是普通字符串，也可以是 typed parts 列表
+- 允许多模态，例如：
+
+```python
+{
+    'role': 'user',
+    'content': [
+        {'type': 'image_url', 'image_url': {'url': 'data:image/png;base64,...'}},
+        {'type': 'text', 'text': '帮我解释这张图'},
+    ],
+}
+```
+
+- 不再包含 `display_content`、`image_path`、`images` 这类 UI 字段
+- 仍然不是 Responses API 的最终协议格式，但已经是项目内部统一的 transcript 格式
+- 当前项目不会把工具结果作为外层 `messages` 持久化；工具轨迹单独进入 `tasks[*].tool_events`
 
 #### B. session_store
 
-`session_store.messages` 基本是 `st.session_state.messages` 的持久化副本。
+`session_store.messages` 是 `canonical message transcript` 的持久化副本。
 
 `session_store.tasks` 则记录每次 prompt 的任务执行轨迹，典型结构：
 
@@ -186,14 +198,22 @@
 
 可以把它理解成：
 
-- `messages`：人类可读聊天历史
+- `messages`：结构统一的会话历史
 - `tasks`：每次 prompt 的执行轨迹和工具调用摘要
 
 #### C. context window
 
 这是当前一次 `agent.chat(...)` 内部真正发给模型的输入，不直接等于 `st.session_state.messages`。
 
-Responses 模式下，运行时会先从历史消息构造基础 conversation：
+运行时会先把 canonical messages 适配成 Responses API 的输入项，也就是：
+
+```python
+canonical message
+-> agent_core._prepare_messages_for_responses(...)
+-> responses input items
+```
+
+例如基础 conversation 会被构造成：
 
 ```python
 [
@@ -232,15 +252,47 @@ Responses 模式下，运行时会先从历史消息构造基础 conversation：
 #### D. 一句话区分
 
 - `st.session_state.messages`：当前页面内存里的聊天记录
-- `session_store.messages`：聊天记录的磁盘副本
+- `session_store.messages`：canonical transcript 的磁盘副本
 - `session_store.tasks[*]`：每次 prompt 的工具执行轨迹
 - `context window`：当前这一轮真正发给模型的协议化输入
 
-#### E. 与 main 分支旧的 Chat Completions 逻辑对比
+#### E. canonical message 的意义
+
+这次重构后，项目内部把“消息”分成了两类：
+
+1. `canonical message`
+2. `render state`
+
+`canonical message` 只关心会话语义：
+
+- 谁说的
+- 说了什么
+- 内容是不是多模态
+
+在当前项目里，`canonical transcript` 可以直接理解为：
+
+- `user` 消息
+- `assistant` 消息
+
+工具结果不属于外层 transcript，而属于当前 task 内部协议续接和 `task.tool_events`。
+
+`render state` 则只在 UI 层临时推导：
+
+- 展示文案
+- 图片如何展开
+- 是否显示“模型返回了图片”这类占位说明
+
+这样做的好处是：
+
+- `session_store` 不再混入 UI 字段
+- `agent.chat(...)` 接收到的历史消息更统一
+- Web / CLI / API 后续接新入口时，只要先生产 canonical message 即可
+
+#### F. 与 main 分支旧的 Chat Completions 逻辑对比
 
 `main` 分支旧的 `chat.completions` 实现，本质分层也是一样的：
 
-- `st.session_state.messages / session_store.messages` 主要保存 UI 聊天消息
+- `st.session_state.messages / session_store.messages` 保存会话消息
 - `session_store.tasks[*].tool_events` 保存工具执行轨迹
 - 当前 task 内工具结果通过模型协议继续注入上下文
 

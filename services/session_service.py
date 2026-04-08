@@ -3,6 +3,12 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from core.canonical_message import (
+    build_assistant_message as make_assistant_message,
+    build_user_message as make_user_message,
+    canonicalize_message,
+    extract_message_text,
+)
 from core.session_store import SessionStore
 
 
@@ -20,32 +26,33 @@ class SessionService:
     def get_messages(self, session_id: str) -> list[dict[str, Any]]:
         payload = self.store.load_session(session_id) or {}
         messages = payload.get('messages', [])
-        return messages if isinstance(messages, list) else []
+        if not isinstance(messages, list):
+            return []
+        return [canonicalize_message(message) for message in messages if isinstance(message, dict)]
+
+    def build_user_message(
+        self,
+        content: str,
+        *,
+        image_url: str | None = None,
+        name: str | None = None,
+    ) -> dict[str, Any]:
+        return make_user_message(content, image_url=image_url, name=name)
+
+    def build_assistant_message(self, content: Any) -> dict[str, Any]:
+        return make_assistant_message(content)
+
+    def append_message(self, session_id: str, message: dict[str, Any]) -> None:
+        self.store.append_message(session_id, canonicalize_message(message))
 
     def append_user_message(self, session_id: str, content: str) -> None:
-        self.store.append_message(session_id, {'role': 'user', 'content': content})
+        self.store.append_message(session_id, make_user_message(content))
 
     def append_user_message_with_name(self, session_id: str, content: str, name: str | None = None) -> None:
-        message: dict[str, Any] = {'role': 'user', 'content': content}
-        if name:
-            message['name'] = name
-        self.store.append_message(session_id, message)
+        self.store.append_message(session_id, make_user_message(content, name=name))
 
-    def append_assistant_message(self, session_id: str, content: str) -> None:
-        self.store.append_message(session_id, {'role': 'assistant', 'content': content})
-
-    def append_tool_message(
-        self,
-        session_id: str,
-        *,
-        tool_name: str,
-        content: str,
-        tool_call_id: str | None = None,
-    ) -> None:
-        message: dict[str, Any] = {'role': 'tool', 'name': tool_name, 'content': content}
-        if tool_call_id:
-            message['tool_call_id'] = tool_call_id
-        self.store.append_message(session_id, message)
+    def append_assistant_message(self, session_id: str, content: Any) -> None:
+        self.store.append_message(session_id, make_assistant_message(content))
 
     def append_memory_card(
         self,
@@ -97,11 +104,12 @@ class SessionService:
             payload = self.store.load_session(path.stem)
             if payload is None:
                 continue
-            messages = payload.get('messages', [])
+            messages = self.get_messages(str(payload.get('session_id', path.stem)))
             preview = ''
             for message in messages:
-                if message.get('role') == 'user' and str(message.get('content', '')).strip():
-                    preview = str(message.get('content', '')).strip()
+                if message.get('role') == 'user':
+                    preview = extract_message_text(message)
+                if preview:
                     break
             records.append(
                 {

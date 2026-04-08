@@ -200,9 +200,12 @@ CLI 并不直接操作模型返回对象，而是消费这些事件。
 
 负责：
 
+- 生产 canonical message
 - 追加 user/assistant 消息
 - 读取消息历史
 - 追加 memory card
+
+这里的 canonical transcript 指的是外层 `user / assistant` 会话历史，不包含工具结果。
 
 ### 6.2 `core/session_store.py`
 
@@ -215,6 +218,9 @@ CLI 并不直接操作模型返回对象，而是消费这些事件。
 - 记录 task
 - 记录 tool events
 - 记录 memory
+
+注意这里持久化的是 canonical transcript，而不是终端或 Streamlit 的展示态字段。
+工具执行轨迹则进入 `tasks[*].tool_events`，只在当前一轮 `agent.chat(...)` 内部通过协议继续传递。
 
 ### 6.3 当前一轮结束后会写什么
 

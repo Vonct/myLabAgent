@@ -12,6 +12,7 @@ from typing import Any, Generator
 from openai import OpenAI
 
 from amap_mcp_adapter import AMapMCPAdapter, DEFAULT_AMAP_MCP_COMMAND
+from core.canonical_message import extract_message_text
 from core.permissions import PermissionLevel
 from core.skill_loader import SkillLoader
 from core.tool_registry import ToolRegistry
@@ -224,33 +225,26 @@ class LabAgent:
 
         return final_content, image_urls, normalized_content, str(reasoning) if reasoning else ''
 
-    def _normalize_input_content(self, content: Any) -> Any:
-        if isinstance(content, list):
-            normalized_items: list[dict[str, Any]] = []
-            for item in content:
-                normalized_item = self._normalize_content_item(item)
-                if normalized_item:
-                    normalized_items.append(normalized_item)
-            return normalized_items
-        return content
-
     def _prepare_messages_for_responses(self, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
         response_input: list[dict[str, Any]] = []
         for message in messages:
-            role = message.get('role')
-            if not role or role in {'system', 'tool'}:
+            if not isinstance(message, dict):
+                continue
+            role = str(message.get('role', '') or '').strip()
+            # External transcript only keeps user/assistant history.
+            if role not in {'user', 'assistant'}:
                 continue
 
-            normalized_content = self._normalize_input_content(message.get('content'))
-            speaker_name = str(message.get('name', '')).strip()
-            if speaker_name and isinstance(normalized_content, str):
-                normalized_content = f'[{speaker_name}] {normalized_content}'.strip()
-            elif speaker_name and isinstance(normalized_content, list):
-                normalized_content = [{'type': 'text', 'text': f'[{speaker_name}]'}] + normalized_content
+            content = message.get('content', '')
+            speaker_name = str(message.get('name', '') or '').strip()
+            if speaker_name and isinstance(content, str):
+                content = f'[{speaker_name}] {content}'.strip()
+            elif speaker_name and isinstance(content, list):
+                content = [{'type': 'text', 'text': f'[{speaker_name}]'}] + content
 
             input_item = {
                 'role': role,
-                'content': normalized_content,
+                'content': content,
             }
 
             response_input.append(input_item)
@@ -260,17 +254,9 @@ class LabAgent:
         for message in reversed(messages):
             if message.get('role') != 'user':
                 continue
-            content = message.get('content')
-            if isinstance(content, str):
-                return content.strip()
-            if isinstance(content, list):
-                text_parts: list[str] = []
-                for item in content:
-                    if not isinstance(item, dict):
-                        continue
-                    if item.get('type') == 'text' and isinstance(item.get('text'), str):
-                        text_parts.append(item['text'])
-                return ' '.join(text_parts).strip()
+            text = extract_message_text(message)
+            if text:
+                return text
         return ''
 
     def _score_memory(self, memory: dict[str, Any], query: str) -> int:

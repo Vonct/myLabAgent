@@ -8,6 +8,7 @@ from typing import Any
 
 from cli_render import CliRenderer
 from cli_repl import CliRepl
+from core.canonical_message import extract_text_from_content
 from core.session_store import SessionStore
 from services.agent_factory import build_agent_runtime
 from services.session_service import SessionService
@@ -236,7 +237,7 @@ def _run_ask(args) -> int:
     renderer.begin_turn(prompt, task.task_id, mode_label='single ask')
 
     final_chunks: list[str] = []
-    persisted_assistant_text = ''
+    persisted_assistant_content = None
     errored = False
     for event in agent.chat(
         messages=messages,
@@ -250,24 +251,15 @@ def _run_ask(args) -> int:
         if event.get('type') == 'answer_chunk':
             final_chunks.append(str(event.get('content', '')))
         elif event.get('type') == 'final_message':
-            content = event.get('content')
-            if isinstance(content, list):
-                text_parts: list[str] = []
-                for item in content:
-                    if not isinstance(item, dict):
-                        continue
-                    text = item.get('text')
-                    if text is None:
-                        text = item.get('content')
-                    if isinstance(text, str) and text:
-                        text_parts.append(text)
-                persisted_assistant_text = ''.join(text_parts).strip()
+            persisted_assistant_content = event.get('content')
         elif event.get('type') == 'error':
             errored = True
 
     final_text = ''.join(final_chunks).strip()
-    text_to_persist = persisted_assistant_text or final_text
-    if text_to_persist:
+    text_to_persist = extract_text_from_content(persisted_assistant_content) or final_text
+    if persisted_assistant_content is not None:
+        session_service.append_assistant_message(session_id, persisted_assistant_content)
+    elif text_to_persist:
         session_service.append_assistant_message(session_id, text_to_persist)
     task_status = 'failed' if errored else 'completed'
     SESSION_STORE.finish_task(session_id, task.task_id, text_to_persist, status=task_status)

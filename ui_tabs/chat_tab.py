@@ -6,6 +6,7 @@ from pathlib import Path
 import streamlit as st
 import streamlit.components.v1 as components
 
+from core.canonical_message import extract_message_image_urls, extract_message_text
 from services.session_service import SessionService
 from services.chat_service import start_task
 
@@ -117,16 +118,14 @@ def _save_chat_image(uploaded_file, chat_upload_dir: Path) -> tuple[str, str]:
 
 
 def _render_message_text(message: dict) -> None:
-    display_content = message.get('display_content')
-    if isinstance(display_content, str) and display_content:
-        st.markdown(display_content)
+    text = extract_message_text(message)
+    if text:
+        st.markdown(text)
         return
 
-    content = message.get('content')
-    if isinstance(content, str) and content:
-        st.markdown(content)
-    elif message.get('images'):
-        st.caption('（模型返回了图片）')
+    if extract_message_image_urls(message):
+        placeholder = '（模型返回了图片）' if message.get('role') == 'assistant' else '（发送了一张图片）'
+        st.caption(placeholder)
 
 
 def _data_url_to_image_bytes(image_url: str):
@@ -159,7 +158,7 @@ def _render_message_images(message: dict) -> None:
         with st.expander('查看图片附件', expanded=False):
             st.image(image_path, width='stretch')
 
-    images = message.get('images') or []
+    images = extract_message_image_urls(message)
     if images:
         _render_image_sources(images)
 
@@ -238,32 +237,23 @@ def render_chat_tab(
         if uploaded_files:
             send_image_path, send_image_name = _save_chat_image(uploaded_files[0], chat_upload_dir)
 
-        user_content_for_model = prompt
+        image_data_url = None
         if send_image_path and Path(send_image_path).exists() and supports_image_input:
             image_data_url = _image_path_to_data_url(send_image_path)
-            if image_data_url:
-                user_content_for_model = [{'type': 'image_url', 'image_url': {'url': image_data_url}}]
-                if prompt.strip():
-                    user_content_for_model.append({'type': 'text', 'text': prompt})
-
         display_content = prompt.strip() or '（发送了一张图片）'
         task_prompt = prompt.strip() or f'[image] {send_image_name or Path(send_image_path).name}'
         task_id = start_task(session_store, task_prompt)
-        user_message = {
-            'role': 'user',
-            'content': user_content_for_model,
-            'display_content': display_content,
-            'image_path': send_image_path,
-        }
+        user_message = session_service.build_user_message(
+            prompt,
+            image_url=image_data_url,
+        )
         st.session_state.messages.append(user_message)
-        session_store.append_message(st.session_state.session_id, user_message)
+        session_service.append_message(st.session_state.session_id, user_message)
 
         with message_container:
             with st.chat_message('user'):
-                st.markdown(display_content)
-                if send_image_path and Path(send_image_path).exists():
-                    with st.expander('查看图片附件', expanded=False):
-                        st.image(send_image_path, width='stretch')
+                _render_message_text(user_message)
+                _render_message_images(user_message)
 
             with st.chat_message('assistant'):
                 message_placeholder = st.empty()
@@ -299,12 +289,9 @@ def render_chat_tab(
                             full_response += chunk['content']
                             message_placeholder.markdown(full_response + '▌')
                         elif chunk_type == 'final_message':
-                            assistant_payload = {
-                                'role': 'assistant',
-                                'content': chunk.get('content', full_response),
-                                'display_content': chunk.get('display_content', full_response),
-                                'images': chunk.get('images', []),
-                            }
+                            assistant_payload = session_service.build_assistant_message(
+                                chunk.get('content', full_response)
+                            )
                         elif chunk_type == 'error':
                             thought_container.update(label='处理失败', state='error')
                             session_store.finish_task(
@@ -316,23 +303,18 @@ def render_chat_tab(
                             st.error(f"Agent 遇到问题: {chunk['content']}")
                     thought_container.update(label='处理完成', state='complete', expanded=False)
                     if assistant_payload is None:
-                        assistant_payload = {
-                            'role': 'assistant',
-                            'content': full_response,
-                            'display_content': full_response,
-                            'images': [],
-                        }
-                    final_display = assistant_payload.get('display_content', '')
+                        assistant_payload = session_service.build_assistant_message(full_response)
+                    final_display = extract_message_text(assistant_payload)
                     if final_display:
                         message_placeholder.markdown(final_display)
                     else:
                         message_placeholder.empty()
-                        if assistant_payload.get('images'):
+                        if extract_message_image_urls(assistant_payload):
                             st.caption('（模型返回了图片）')
                     with media_container:
                         _render_message_images(assistant_payload)
                     st.session_state.messages.append(assistant_payload)
-                    session_store.append_message(st.session_state.session_id, assistant_payload)
+                    session_service.append_message(st.session_state.session_id, assistant_payload)
                     task_result = final_display or '（模型返回了图片）'
                     session_store.finish_task(st.session_state.session_id, task_id, task_result)
                     task_record = session_store.get_task(st.session_state.session_id, task_id) or {}

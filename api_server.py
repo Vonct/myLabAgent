@@ -13,6 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from cli import MODEL_CAPABILITIES, PROJECT_ROOT, SESSION_STORE, _build_agent_from_config, _resolve_runtime_config
+from core.canonical_message import extract_text_from_content
 from core.session_store import SessionStore
 from core.prompt_loader import load_prompt
 from services.miniprogram_session_service import MiniprogramSessionService
@@ -233,11 +234,12 @@ def get_session(session_id: str) -> SessionDetailResponse:
     payload = SESSION_STORE.load_session(session_id)
     if payload is None:
         raise HTTPException(status_code=404, detail=f'Session not found: {session_id}')
+    session_service = _runtime().session_service
     return SessionDetailResponse(
         session_id=payload['session_id'],
         created_at=payload.get('created_at', ''),
         updated_at=payload.get('updated_at', ''),
-        messages=payload.get('messages', []),
+        messages=session_service.get_messages(session_id),
         tasks=payload.get('tasks', []),
         memories=payload.get('memories', []),
     )
@@ -259,7 +261,7 @@ def chat(req: ChatRequest) -> ChatResponse:
     task = SESSION_STORE.start_task(session_id, prompt)
 
     final_chunks: list[str] = []
-    persisted_assistant_text = ''
+    persisted_assistant_content = None
     thinking_parts: list[str] = []
     tool_names: list[str] = []
     event_log: list[dict[str, Any]] = []
@@ -287,18 +289,7 @@ def chat(req: ChatRequest) -> ChatResponse:
             if tool_name and tool_name not in tool_names:
                 tool_names.append(tool_name)
         elif event_type == 'final_message':
-            content = event.get('content')
-            if isinstance(content, list):
-                text_parts: list[str] = []
-                for item in content:
-                    if not isinstance(item, dict):
-                        continue
-                    text = item.get('text')
-                    if text is None:
-                        text = item.get('content')
-                    if isinstance(text, str) and text:
-                        text_parts.append(text)
-                persisted_assistant_text = ''.join(text_parts).strip()
+            persisted_assistant_content = event.get('content')
         elif event_type == 'error':
             errored = True
             detail = str(event.get('content', 'Agent execution failed.')).strip() or 'Agent execution failed.'
@@ -306,10 +297,12 @@ def chat(req: ChatRequest) -> ChatResponse:
             SESSION_STORE.finish_task(session_id, task.task_id, detail, status='failed')
             raise HTTPException(status_code=500, detail=detail)
 
-    final_text = (persisted_assistant_text or ''.join(final_chunks)).strip()
+    final_text = (extract_text_from_content(persisted_assistant_content) or ''.join(final_chunks)).strip()
     task_status = 'failed' if errored else 'completed'
 
-    if final_text:
+    if persisted_assistant_content is not None:
+        session_service.append_assistant_message(session_id, persisted_assistant_content)
+    elif final_text:
         session_service.append_assistant_message(session_id, final_text)
     SESSION_STORE.finish_task(session_id, task.task_id, final_text, status=task_status)
     task_record = SESSION_STORE.get_task(session_id, task.task_id) or {}
@@ -376,7 +369,7 @@ def get_miniprogram_history(
         session_id=payload['session_id'],
         space_id=space_id.strip(),
         space_name=str(entry.get('space_name', '') or space_name),
-        messages=payload.get('messages', []),
+        messages=runtime.miniprogram_session_service.session_service.get_messages(payload['session_id']),
         tasks=payload.get('tasks', []),
         memories=payload.get('memories', []),
     )
@@ -412,7 +405,7 @@ def miniprogram_chat(
     task = MINIPROGRAM_SESSION_STORE.start_task(session_id, task_prompt)
 
     final_chunks: list[str] = []
-    persisted_assistant_text = ''
+    persisted_assistant_content = None
     thinking_parts: list[str] = []
     tool_names: list[str] = []
     event_log: list[dict[str, Any]] = []
@@ -439,18 +432,7 @@ def miniprogram_chat(
             if tool_name and tool_name not in tool_names:
                 tool_names.append(tool_name)
         elif event_type == 'final_message':
-            content = event.get('content')
-            if isinstance(content, list):
-                text_parts: list[str] = []
-                for item in content:
-                    if not isinstance(item, dict):
-                        continue
-                    text = item.get('text')
-                    if text is None:
-                        text = item.get('content')
-                    if isinstance(text, str) and text:
-                        text_parts.append(text)
-                persisted_assistant_text = ''.join(text_parts).strip()
+            persisted_assistant_content = event.get('content')
         elif event_type == 'error':
             detail = str(event.get('content', 'Agent execution failed.')).strip() or 'Agent execution failed.'
             logger.error(
@@ -464,8 +446,11 @@ def miniprogram_chat(
             MINIPROGRAM_SESSION_STORE.finish_task(session_id, task.task_id, detail, status='failed')
             raise HTTPException(status_code=500, detail=detail)
 
-    final_text = (persisted_assistant_text or ''.join(final_chunks)).strip()
-    session_service.append_assistant_message(session_id, final_text)
+    final_text = (extract_text_from_content(persisted_assistant_content) or ''.join(final_chunks)).strip()
+    if persisted_assistant_content is not None:
+        session_service.append_assistant_message(session_id, persisted_assistant_content)
+    elif final_text:
+        session_service.append_assistant_message(session_id, final_text)
     MINIPROGRAM_SESSION_STORE.finish_task(session_id, task.task_id, final_text, status='completed')
     task_record = MINIPROGRAM_SESSION_STORE.get_task(session_id, task.task_id) or {}
     session_service.append_memory_card(
