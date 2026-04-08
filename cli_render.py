@@ -3,17 +3,19 @@ from __future__ import annotations
 import os
 import sys
 import time
+from collections import deque
 from contextlib import contextmanager
 
 from rich.align import Align
 from rich.columns import Columns
 from rich.console import Console, Group
+from rich.layout import Layout
 from rich.live import Live
 from rich.markdown import Markdown
 from rich.padding import Padding
 from rich.panel import Panel
 from rich.rule import Rule
-from rich.syntax import Syntax
+from rich.table import Table
 from rich.text import Text
 
 try:
@@ -31,15 +33,37 @@ else:
 class CliRenderer:
     def __init__(self, console: Console | None = None):
         self.console = console or Console()
-        self._answer_started = False
         self._prompt_session = PromptSession() if PromptSession is not None else None
+        self._live: Live | None = None
+        self._session_id = ''
+        self._model_name = 'unknown'
+        self._mode_label = 'interactive cli'
+        self._reset_turn_state()
+
+    def _reset_turn_state(self) -> None:
+        self._turn_prompt = ''
+        self._task_id = ''
+        self._answer_buffer = ''
+        self._reasoning_buffer = ''
+        self._thought = 'Idle'
+        self._active_tool = ''
+        self._tool_count = 0
+        self._turn_status = 'idle'
+        self._memory_saved = False
+        self._turn_started_at: float | None = None
+        self._recent_events: deque[tuple[str, str]] = deque(maxlen=8)
 
     def _truncate_tool_result(self, output: object) -> str:
-        text = str(output or '')
-        if len(text) <= 1200:
+        text = str(output or '').strip()
+        if len(text) <= 420:
+            return text or '(empty)'
+        return text[:420].rstrip() + '...'
+
+    def _shorten(self, content: object, limit: int) -> str:
+        text = str(content or '').strip().replace('\n', ' ')
+        if len(text) <= limit:
             return text
-        keep_length = min(max(240, int(len(text) * 0.2)), 1200)
-        return text[:keep_length].rstrip() + '\n...'
+        return text[:limit].rstrip() + '...'
 
     def _supports_pixel_art(self) -> bool:
         encoding = (getattr(sys.stdout, 'encoding', '') or '').lower()
@@ -79,12 +103,8 @@ class CliRenderer:
             "[cyan]       ▄▄▄▄██████▄▄               ▄▄██████▀       \n"
             "[cyan]          ▀████████▄▄▄▄▄▄▄▄████████▀          \n"
             "[dark_orange]                    ▀▀  ▀▀                    \n"
-            "[green]               ▄█████████████               \n"
-            "[green]               ██[yellow]▀▄[/][green]██[bright_white]▄[/][green]██[yellow]▀▄[/][green]██               \n"
-            "[green]               ██[yellow]▄▀[/][green]██[bright_white]▀[/][green]██[yellow]▄▀[/][green]██               \n"
-            "[green]               ▀█████████████               \n"
         )
-    
+
     def _build_echo_logo_pixel2(self) -> Text:
         return Text.from_markup(
             "[bright_cyan]                ▄▄▄▄▄▄▄                \n"
@@ -101,23 +121,19 @@ class CliRenderer:
             "[bright_cyan]             ▀███████████▀             \n"
             "[bright_cyan]                 ▀███▀                 \n"
             "\n"
-            "[green]            ▄█████████████▄            \n"
-            "[green]            ██[yellow]▀▄[/][green]██[bright_white]▄[/][green]██[yellow]▀▄[/][green]██            \n"
-            "[green]            ██[yellow]▄▀[/][green]██[bright_white]▀[/][green]██[yellow]▄▀[/][green]██            \n"
-            "[green]            ▀█████████████▀            \n"
         )
-
 
     def _build_echo_logo(self) -> Text:
         if self._supports_pixel_art():
+            variant = os.environ.get('LABAGENT_CLI_LOGO_VARIANT', '1').strip()
+            if variant == '2':
+                return self._build_echo_logo_pixel2()
             return self._build_echo_logo_pixel()
         return self._build_echo_logo_ascii()
 
     def _build_wordmark(self) -> Text:
         return Text.from_markup(
             "[bold bright_cyan]"
-            " \n"
-            " \n"
             " _        _    ____    _    ____ _____ _   _ _____\n"
             "| |      / \\  | __ )  / \\  / ___| ____| \\ | |_   _|\n"
             "| |     / _ \\ |  _ \\ / _ \\| |  _|  _| |  \\| | | |  \n"
@@ -128,14 +144,14 @@ class CliRenderer:
 
     def _build_signature(self) -> Text:
         return Text.from_markup(
-            "[dim]crafted by[/dim] [italic bright_white]Vonct[/italic bright_white]"
+            "[dim]shared runtime / local coding agent[/dim]"
         )
 
     def _build_meta(self, session_id: str, model_name: str) -> Text:
         return Text.from_markup(
             f"[bold]Session[/bold]  [cyan]{session_id}[/cyan]\n"
             f"[bold]Model[/bold]    [magenta]{model_name}[/magenta]\n"
-            "[bold]Mode[/bold]     [green]interactive cli[/green]"
+            f"[bold]Mode[/bold]     [green]{self._mode_label}[/green]"
         )
 
     def _build_logo_block(self, stage: int):
@@ -307,7 +323,126 @@ class CliRenderer:
                     out.write(line[:cursor])
                 out.flush()
 
+    def _elapsed_text(self) -> str:
+        if self._turn_started_at is None:
+            return '-'
+        return f'{time.time() - self._turn_started_at:.1f}s'
+
+    def _build_status_panel(self) -> Panel:
+        table = Table.grid(padding=(0, 1))
+        table.add_column(style='bold white')
+        table.add_column(style='cyan')
+        table.add_row('Session', self._session_id or '-')
+        table.add_row('Model', self._model_name or '-')
+        table.add_row('Task', self._task_id[:12] if self._task_id else '-')
+        table.add_row('Status', self._turn_status)
+        table.add_row('Tools', str(self._tool_count))
+        table.add_row('Active', self._active_tool or '-')
+        table.add_row('Memory', 'saved' if self._memory_saved else 'pending')
+        table.add_row('Elapsed', self._elapsed_text())
+        return Panel(table, title='Status', border_style='bright_blue')
+
+    def _build_prompt_panel(self) -> Panel:
+        prompt_text = self._turn_prompt or 'No active prompt.'
+        body = Group(
+            Text(self._shorten(prompt_text, 260) or '(empty)', style='white'),
+            Text(''),
+            Text(f'Thought: {self._shorten(self._thought, 180) or "-"}', style='dim'),
+        )
+        return Panel(body, title='Current Turn', border_style='blue')
+
+    def _build_recent_activity_panel(self) -> Panel:
+        if not self._recent_events:
+            return Panel(Text('Waiting for events...', style='dim'), title='Recent Activity', border_style='cyan')
+        rows: list[Text] = []
+        for style, content in self._recent_events:
+            rows.append(Text(content, style=style))
+        return Panel(Group(*rows), title='Recent Activity', border_style='cyan')
+
+    def _build_reasoning_panel(self) -> Panel:
+        if not self._reasoning_buffer:
+            content = Text('No reasoning surfaced.', style='dim')
+        else:
+            content = Text(self._shorten(self._reasoning_buffer, 1200), style='yellow')
+        return Panel(content, title='Reasoning', border_style='yellow')
+
+    def _build_answer_panel(self) -> Panel:
+        answer_text = self._answer_buffer or 'Waiting for assistant output...'
+        return Panel(Text(answer_text, style='white'), title='Assistant', border_style='green')
+
+    def _build_runtime_layout(self) -> Layout:
+        layout = Layout()
+        layout.split_column(
+            Layout(name='top', size=9),
+            Layout(name='body'),
+            Layout(name='footer', size=4),
+        )
+        layout['top'].split_row(
+            Layout(self._build_status_panel(), name='status', ratio=1),
+            Layout(self._build_prompt_panel(), name='turn', ratio=2),
+        )
+        layout['body'].split_row(
+            Layout(self._build_answer_panel(), name='answer', ratio=3),
+            Layout(
+                Group(
+                    self._build_recent_activity_panel(),
+                    self._build_reasoning_panel(),
+                ),
+                name='activity',
+                ratio=2,
+            ),
+        )
+        footer_text = Text.from_markup(
+            '[dim]/help  /session  /models  /skills  /add2lib <pdf>  /exit[/dim]'
+        )
+        layout['footer'].update(Panel(footer_text, title='Shortcuts', border_style='dim'))
+        return layout
+
+    def _sync_live(self) -> None:
+        if self._live is not None:
+            self._live.update(self._build_runtime_layout())
+
+    def _start_live(self) -> None:
+        if self._live is not None:
+            return
+        self._live = Live(
+            self._build_runtime_layout(),
+            console=self.console,
+            refresh_per_second=12,
+            transient=False,
+        )
+        self._live.start()
+
+    def _stop_live(self) -> None:
+        if self._live is None:
+            return
+        self._live.update(self._build_runtime_layout())
+        self._live.stop()
+        self._live = None
+
+    def _push_event(self, style: str, content: str) -> None:
+        self._recent_events.append((style, self._shorten(content, 180) or '(empty)'))
+
+    def set_session_context(self, session_id: str, model_name: str, mode_label: str = 'interactive cli') -> None:
+        self._session_id = session_id
+        self._model_name = model_name
+        self._mode_label = mode_label
+        self._sync_live()
+
+    def begin_turn(self, prompt: str, task_id: str, *, mode_label: str | None = None) -> None:
+        self._reset_turn_state()
+        self._turn_prompt = prompt
+        self._task_id = task_id
+        self._turn_status = 'running'
+        self._turn_started_at = time.time()
+        if mode_label is not None:
+            self._mode_label = mode_label
+        self._push_event('cyan', 'Turn started')
+        self._start_live()
+        self._sync_live()
+
     def print_banner(self, session_id: str, model_name: str) -> None:
+        self.set_session_context(session_id, model_name)
         with Live(console=self.console, refresh_per_second=30, transient=True) as live:
             for stage, delay in ((1, 0.06), (2, 0.08), (3, 0.07), (4, 0.0)):
                 live.update(self._build_banner(session_id, model_name, stage))
@@ -340,58 +475,98 @@ class CliRenderer:
 
     def render_event(self, event: dict) -> None:
         event_type = event.get('type')
+        if self._live is None and event_type in {'thought', 'reasoning', 'tool_exec', 'tool_result', 'answer_chunk', 'error'}:
+            self._start_live()
+
         if event_type == 'thought':
-            self.console.print(f"[dim]{event.get('content', '')}[/dim]")
+            self._thought = str(event.get('content', '')).strip() or 'Thinking'
+            self._push_event('dim', f'Thought: {self._thought}')
+            self._sync_live()
             return
         if event_type == 'reasoning':
-            self.console.print(Panel(event.get('content', ''), title='Reasoning', border_style='yellow'))
+            self._reasoning_buffer = str(event.get('content', '')).strip()
+            self._push_event('yellow', 'Reasoning updated')
+            self._sync_live()
             return
         if event_type == 'tool_exec':
-            syntax = Syntax(event.get('input', '{}'), 'json', word_wrap=True)
-            self.console.print(Panel(syntax, title=f"Tool: {event.get('tool', '')}", border_style='cyan'))
+            self._active_tool = str(event.get('tool', '')).strip()
+            self._tool_count += 1
+            payload = self._shorten(event.get('input', '{}'), 120)
+            self._push_event('cyan', f'→ {self._active_tool}: {payload}')
+            self._sync_live()
             return
         if event_type == 'tool_result':
-            truncated_output = self._truncate_tool_result(event.get('output', ''))
-            self.console.print(Panel(truncated_output, title='Tool Result', border_style='cyan'))
+            result_preview = self._truncate_tool_result(event.get('output', ''))
+            tool_name = self._active_tool or 'tool'
+            self._push_event('bright_cyan', f'← {tool_name}: {result_preview}')
+            self._active_tool = ''
+            self._sync_live()
             return
         if event_type == 'answer_chunk':
-            content = event.get('content', '')
-            if not self._answer_started:
-                self.console.print('[bold green]Assistant[/bold green]')
-                self._answer_started = True
-            self.console.print(content, end='')
+            content = str(event.get('content', ''))
+            self._answer_buffer += content
+            self._turn_status = 'responding'
+            self._sync_live()
             return
         if event_type == 'error':
-            self.console.print(Panel(event.get('content', ''), title='Error', border_style='red'))
+            self._turn_status = 'failed'
+            self._active_tool = ''
+            self._push_event('red', f"Error: {self._shorten(event.get('content', ''), 160)}")
+            self._sync_live()
             return
         if event_type == 'final_message':
             return
-        self.console.print(Text(str(event)))
+
+        self._push_event('white', str(event))
+        self._sync_live()
+
+    def finish_turn(self, *, status: str, memory_saved: bool) -> None:
+        if self._live is None and self._turn_status == 'idle' and not self._task_id:
+            return
+        self._turn_status = status
+        self._memory_saved = memory_saved
+        self._active_tool = ''
+        if status == 'completed':
+            self._push_event('green', 'Turn completed')
+        else:
+            self._push_event('red', f'Turn finished with status={status}')
+        if memory_saved:
+            self._push_event('green', 'Memory card saved')
+        self._sync_live()
+        self._stop_live()
+        self.console.print(Rule(style='dim blue'))
 
     def finish_answer(self) -> None:
-        if self._answer_started:
-            self.console.print()
-        self._answer_started = False
+        if self._live is None:
+            return
+        self.finish_turn(status=self._turn_status or 'completed', memory_saved=self._memory_saved)
 
     def print_user(self, content: str) -> None:
-        self.console.print(f'[bold blue]You[/bold blue]: {content}')
+        prompt = self._shorten(content, 220)
+        self.console.print(Panel(Text(prompt, style='white'), title='You', border_style='bright_blue'))
 
     def print_session_list(self, records: list[dict]) -> None:
         if not records:
             self.console.print('[dim]No sessions found.[/dim]')
             return
+        table = Table(title='Sessions', header_style='bold cyan')
+        table.add_column('Session ID', style='cyan')
+        table.add_column('Updated At', style='magenta')
+        table.add_column('Messages', justify='right')
+        table.add_column('Preview', overflow='fold')
         for record in records:
             preview = record.get('preview') or '(empty)'
-            self.console.print(
-                Panel(
-                    f"[cyan]{record.get('session_id', '')}[/cyan]\n{preview}\n"
-                    f"messages={record.get('message_count', 0)} updated_at={record.get('updated_at', '')}",
-                    border_style='blue',
-                )
+            table.add_row(
+                str(record.get('session_id', '')),
+                str(record.get('updated_at', '')),
+                str(record.get('message_count', 0)),
+                self._shorten(preview, 100),
             )
+        self.console.print(table)
 
     def print_markdown(self, content: str) -> None:
         self.console.print(Markdown(content))
 
     def print_model_switched(self, model_name: str) -> None:
+        self._model_name = model_name
         self.console.print(Panel.fit(f'Model switched to [magenta]{model_name}[/magenta].', border_style='blue'))

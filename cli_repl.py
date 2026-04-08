@@ -104,6 +104,7 @@ class CliRepl:
             self.renderer.print_markdown('Model switching is unavailable in the current runtime.')
             return
         self.agent, self.supports_thinking = self.on_model_switch(selected_model)
+        self.renderer.set_session_context(self.session_id, selected_model, mode_label='interactive cli')
         self.renderer.print_model_switched(selected_model)
 
     def _handle_skills_command(self) -> None:
@@ -112,6 +113,11 @@ class CliRepl:
         self.renderer.print_skills(skills)
 
     def run(self) -> int:
+        self.renderer.set_session_context(
+            self.session_id,
+            getattr(self.agent, 'llm_model', 'unknown'),
+            mode_label='interactive cli',
+        )
         self.renderer.print_banner(self.session_id, getattr(self.agent, 'llm_model', 'unknown'))
         while True:
             try:
@@ -144,6 +150,7 @@ class CliRepl:
             self.session_service.append_user_message(self.session_id, user_text)
             messages = self.session_service.get_messages(self.session_id)
             task = self.session_store.start_task(self.session_id, user_text)
+            self.renderer.begin_turn(user_text, task.task_id, mode_label='interactive cli')
 
             final_chunks: list[str] = []
             persisted_assistant_text = ''
@@ -175,7 +182,6 @@ class CliRepl:
                 elif event.get('type') == 'error':
                     errored = True
 
-            self.renderer.finish_answer()
             final_text = ''.join(final_chunks).strip()
             text_to_persist = persisted_assistant_text or final_text
             if text_to_persist:
@@ -197,3 +203,4 @@ class CliRepl:
                 has_image=False,
                 status=task_status,
             )
+            self.renderer.finish_turn(status=task_status, memory_saved=True)

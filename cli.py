@@ -195,6 +195,11 @@ def _run_chat(args) -> int:
     session_service = SessionService(SESSION_STORE)
     session_payload = session_service.create_or_resume_session(args.session_id)
     renderer = CliRenderer()
+    renderer.set_session_context(
+        session_payload['session_id'],
+        config['llm_model'],
+        mode_label='interactive cli',
+    )
 
     def switch_model(model_name: str) -> tuple[Any, bool]:
         updated_config = _resolve_runtime_config(args, llm_model_override=model_name)
@@ -222,11 +227,13 @@ def _run_ask(args) -> int:
     session_payload = session_service.create_or_resume_session(args.session_id)
     session_id = session_payload['session_id']
     renderer = CliRenderer()
+    renderer.set_session_context(session_id, config['llm_model'], mode_label='single ask')
     prompt = args.prompt.strip()
     renderer.print_user(prompt)
     session_service.append_user_message(session_id, prompt)
     messages = session_service.get_messages(session_id)
     task = SESSION_STORE.start_task(session_id, prompt)
+    renderer.begin_turn(prompt, task.task_id, mode_label='single ask')
 
     final_chunks: list[str] = []
     persisted_assistant_text = ''
@@ -257,7 +264,6 @@ def _run_ask(args) -> int:
                 persisted_assistant_text = ''.join(text_parts).strip()
         elif event.get('type') == 'error':
             errored = True
-    renderer.finish_answer()
 
     final_text = ''.join(final_chunks).strip()
     text_to_persist = persisted_assistant_text or final_text
@@ -275,6 +281,7 @@ def _run_ask(args) -> int:
         has_image=False,
         status=task_status,
     )
+    renderer.finish_turn(status=task_status, memory_saved=True)
     return 1 if errored else 0
 
 

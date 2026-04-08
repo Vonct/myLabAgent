@@ -12,4 +12,7 @@ vip_config.json
 .trae/
 app_data/sessions/
 app_data/rag_engine.log
+app_data/miniprogram_sessions/
 vector_store.json
+.DS_Store
+tmp/
