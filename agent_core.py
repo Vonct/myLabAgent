@@ -13,9 +13,15 @@ from openai import OpenAI
 
 from amap_mcp_adapter import AMapMCPAdapter, DEFAULT_AMAP_MCP_COMMAND
 from core.canonical_message import extract_message_text
+from core.long_term_memory import LongTermMemoryStore
 from core.permissions import PermissionLevel
 from core.skill_loader import SkillLoader
 from core.tool_registry import ToolRegistry
+from image_generation_service import (
+    DEFAULT_OPENROUTER_BASE_URL,
+    DEFAULT_OPENROUTER_IMAGE_MODEL,
+    ImageGenerationService,
+)
 from rag_engine import RAGEngine
 
 SHELL_COMMAND_BLOCKLIST = (
@@ -41,9 +47,12 @@ class LabAgent:
         project_root: Path | None = None,
         enable_subagent: bool = True,
         extra_body_for_thinking: dict[str, Any] | None = None,
+        long_term_memory_store: LongTermMemoryStore | None = None,
     ):
         request_timeout = float(os.environ.get('LABCHAT_REQUEST_TIMEOUT', '180'))
         self.client = OpenAI(api_key=api_key, base_url=base_url, timeout=request_timeout)
+        self.api_key = api_key
+        self.base_url = base_url
         self.llm_model = llm_model
         self.rag = rag_engine
         self.request_timeout = request_timeout
@@ -58,14 +67,36 @@ class LabAgent:
         self.project_root = (project_root or Path(__file__).parent).resolve()
         self.max_tool_rounds = max(1, int(max_tool_rounds))
         self.enable_subagent = enable_subagent
+        self.long_term_memory_store = long_term_memory_store
         self.extra_body_for_thinking = (
             dict(extra_body_for_thinking) if isinstance(extra_body_for_thinking, dict) else None
+        )
+        image_api_key = (
+            os.environ.get('LABAGENT_IMAGE_API_KEY')
+            or os.environ.get('OPENROUTER_API_KEY')
+            or (api_key if 'openrouter' in str(base_url).lower() else '')
+        )
+        image_base_url = (
+            os.environ.get('LABAGENT_IMAGE_BASE_URL')
+            or (base_url if 'openrouter' in str(base_url).lower() else DEFAULT_OPENROUTER_BASE_URL)
+        )
+        self.image_service = ImageGenerationService(
+            api_key=image_api_key,
+            base_url=image_base_url,
+            model=os.environ.get('LABAGENT_IMAGE_MODEL') or DEFAULT_OPENROUTER_IMAGE_MODEL,
+            output_root=self.project_root / 'app_data' / 'generated_images',
+            request_timeout=self.request_timeout,
+            api_mode=os.environ.get('LABAGENT_IMAGE_API_MODE', 'responses'),
         )
         if self.tool_registry is not None:
             self.tool_registry.register('retrieve_document', self._run_retrieve_document, PermissionLevel.READ_ONLY)
             self.tool_registry.register('recognize_handwritten_digit', self._run_digit_inference, PermissionLevel.EXEC)
             self.tool_registry.register('get_amap_weather', self._run_weather_query, PermissionLevel.NETWORK)
+            self.tool_registry.register('generate_image', self._run_generate_image, PermissionLevel.FILE_WRITE)
+            self.tool_registry.register('edit_image', self._run_edit_image, PermissionLevel.FILE_WRITE)
             self.tool_registry.register('read_file', self._run_read_file, PermissionLevel.READ_ONLY)
+            self.tool_registry.register('write_file', self._run_write_file, PermissionLevel.FILE_WRITE)
+            self.tool_registry.register('edit_file', self._run_edit_file, PermissionLevel.FILE_WRITE)
             self.tool_registry.register('grep_search', self._run_grep_search, PermissionLevel.READ_ONLY)
             self.tool_registry.register('run_shell_command', self._run_shell_command, PermissionLevel.EXEC)
             if self.enable_subagent:
@@ -225,6 +256,43 @@ class LabAgent:
 
         return final_content, image_urls, normalized_content, str(reasoning) if reasoning else ''
 
+    def _prepare_content_for_responses(self, content: Any) -> str | list[dict[str, Any]]:
+        if isinstance(content, str):
+            return content
+
+        if not isinstance(content, list):
+            return str(content or '')
+
+        response_parts: list[dict[str, Any]] = []
+        for item in content:
+            if isinstance(item, str):
+                if item:
+                    response_parts.append({'type': 'input_text', 'text': item})
+                continue
+            if not isinstance(item, dict):
+                continue
+
+            item_type = str(item.get('type', '') or '').strip()
+            # Fallback: output_text should normally be canonicalized before persistence,
+            # but convert it back to input_text if a raw Responses payload is replayed.
+            if item_type in {'text', 'input_text', 'output_text'}:
+                text = item.get('text')
+                if text is None:
+                    text = item.get('content')
+                if text:
+                    response_parts.append({'type': 'input_text', 'text': str(text)})
+                continue
+
+            if item_type in {'image_url', 'input_image'}:
+                image_url = item.get('image_url')
+                if isinstance(image_url, dict):
+                    image_url = image_url.get('url')
+                url = str(image_url or '').strip()
+                if url:
+                    response_parts.append({'type': 'input_image', 'image_url': url})
+
+        return response_parts if response_parts else ''
+
     def _prepare_messages_for_responses(self, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
         response_input: list[dict[str, Any]] = []
         for message in messages:
@@ -241,6 +309,7 @@ class LabAgent:
                 content = f'[{speaker_name}] {content}'.strip()
             elif speaker_name and isinstance(content, list):
                 content = [{'type': 'text', 'text': f'[{speaker_name}]'}] + content
+            content = self._prepare_content_for_responses(content)
 
             input_item = {
                 'role': role,
@@ -258,6 +327,66 @@ class LabAgent:
             if text:
                 return text
         return ''
+
+    def _render_recent_turns_for_memory_query(self, messages: list[dict[str, Any]]) -> str:
+        max_messages = max(2, int(os.environ.get('LABAGENT_LONG_MEMORY_QUERY_MESSAGES', '6')))
+        max_chars = max(400, int(os.environ.get('LABAGENT_LONG_MEMORY_QUERY_CHARS', '1600')))
+        lines: list[str] = []
+        for message in messages[-max_messages:]:
+            role = str(message.get('role', '') or '').strip()
+            if role not in {'user', 'assistant'}:
+                continue
+            text = extract_message_text(message)
+            if not text:
+                continue
+            label = 'User' if role == 'user' else 'Assistant'
+            lines.append(f'{label}: {text[:700]}')
+        rendered = '\n'.join(lines).strip()
+        if len(rendered) > max_chars:
+            rendered = rendered[-max_chars:].lstrip()
+        return rendered
+
+    def _build_long_term_memory_query(self, messages: list[dict[str, Any]]) -> str:
+        latest_user = self._latest_user_query(messages)
+        recent_context = self._render_recent_turns_for_memory_query(messages)
+        if latest_user and recent_context and recent_context != latest_user:
+            return (
+                'Current user request:\n'
+                f'{latest_user}\n\n'
+                'Recent conversation context:\n'
+                f'{recent_context}'
+            )
+        return latest_user or recent_context
+
+    def _is_long_term_memory_enabled(self) -> bool:
+        value = os.environ.get('LABAGENT_ENABLE_LONG_TERM_MEMORY', '1').strip().lower()
+        return value not in {'0', 'false', 'off', 'no'}
+
+    def _build_long_term_memory_context(self, messages: list[dict[str, Any]]) -> str:
+        if not self.long_term_memory_store or not self._is_long_term_memory_enabled():
+            return ''
+        query = self._build_long_term_memory_query(messages)
+        if not query:
+            return ''
+        limit = max(1, int(os.environ.get('LABAGENT_LONG_MEMORY_TOP_K', '4')))
+        memories = self.long_term_memory_store.retrieve(
+            query,
+            limit=limit,
+            project_id=str(self.project_root),
+        )
+        if not memories:
+            return ''
+        lines = ['Relevant long-term user/project memory:']
+        for idx, memory in enumerate(memories, start=1):
+            text = str(memory.get('text', '') or '').strip()
+            if not text:
+                continue
+            kind = str(memory.get('kind', 'memory') or 'memory').strip()
+            scope = str(memory.get('scope', 'project') or 'project').strip()
+            lines.append(f'{idx}. [{kind}/{scope}] {text}')
+        if len(lines) == 1:
+            return ''
+        return '\n'.join(lines)
 
     def _score_memory(self, memory: dict[str, Any], query: str) -> int:
         summary = str(memory.get('summary', '')).lower()
@@ -284,6 +413,21 @@ class LabAgent:
         ranked = sorted(memories, key=lambda m: self._score_memory(m, query), reverse=True)
         selected = ranked[:3]
         lines = ['Previous relevant memory:']
+        latest_image = None
+        generated_images = payload.get('generated_images', [])
+        if isinstance(generated_images, list) and generated_images:
+            for item in reversed(generated_images):
+                if isinstance(item, dict):
+                    latest_image = item
+                    break
+        if latest_image:
+            image_id = str(latest_image.get('image_id', '') or '').strip()
+            path = str(latest_image.get('path', '') or '').strip()
+            prompt = str(latest_image.get('prompt', '') or '').strip()
+            image_line = f"Latest generated image: image_id={image_id or '(unknown)'}, path={path or '(unknown)'}"
+            if prompt:
+                image_line += f", prompt={prompt[:240]}"
+            lines.append(image_line)
         for idx, memory in enumerate(selected, start=1):
             summary = str(memory.get('summary', '')).strip()
             if not summary:
@@ -297,23 +441,109 @@ class LabAgent:
         value = os.environ.get('LABAGENT_ENABLE_MEMORY_INJECTION', '1').strip().lower()
         return value not in {'0', 'false', 'off', 'no'}
 
+    def _parse_json_object(self, text: str) -> dict[str, Any]:
+        text = text.strip()
+        if not text:
+            return {}
+        try:
+            parsed = json.loads(text)
+            return parsed if isinstance(parsed, dict) else {}
+        except json.JSONDecodeError:
+            match = re.search(r'\{.*\}', text, flags=re.DOTALL)
+            if not match:
+                return {}
+            try:
+                parsed = json.loads(match.group(0))
+                return parsed if isinstance(parsed, dict) else {}
+            except json.JSONDecodeError:
+                return {}
+
+    def record_long_term_memory(
+        self,
+        *,
+        prompt: str,
+        answer: str,
+        tool_events: list[dict[str, Any]] | None,
+        session_id: str,
+        task_id: str,
+        status: str = 'completed',
+    ) -> dict[str, Any]:
+        if status != 'completed' or not self.long_term_memory_store or not self._is_long_term_memory_enabled():
+            return {'saved': 0, 'candidates': 0}
+
+        existing_memories = self.long_term_memory_store.retrieve(
+            f'{prompt}\n{answer[:1200]}',
+            limit=5,
+            project_id=str(self.project_root),
+        )
+        existing_text = '\n'.join(
+            f"- [{item.get('kind', 'memory')}/{item.get('scope', 'project')}] {item.get('text', '')}"
+            for item in existing_memories
+            if str(item.get('text', '')).strip()
+        )
+        tool_names = []
+        for event in tool_events or []:
+            name = str(event.get('tool', '') or '').strip()
+            if name and name not in tool_names:
+                tool_names.append(name)
+
+        extractor_input = (
+            'Current turn:\n'
+            f'User prompt:\n{prompt.strip()[:2000]}\n\n'
+            f'Assistant answer:\n{answer.strip()[:2400]}\n\n'
+            f'Tools used: {", ".join(tool_names) if tool_names else "(none)"}\n\n'
+            'Existing related long-term memories:\n'
+            f'{existing_text or "(none)"}'
+        )
+        instructions = (
+            'You extract durable long-term memories for an agent application. '
+            'Return JSON only, with shape {"memories":[...]}. '
+            'Create 0-3 memories only when the turn reveals stable user preferences, recurring workflow choices, '
+            'project facts, or constraints that will help future turns. '
+            'Do not store one-off tasks, transient facts like weather, secrets, credentials, private identifiers, '
+            'or information already covered by an existing memory. '
+            'Allowed kind values: preference, workflow, project_fact, constraint. '
+            'Allowed scope values: global, project. '
+            'Each memory must include kind, scope, text, confidence, and evidence. '
+            'Use concise Chinese text when the user conversation is Chinese. '
+            'If nothing should be saved, return {"memories":[]}.'
+        )
+        try:
+            response = self._create_response(
+                [{'role': 'user', 'content': extractor_input}],
+                {},
+                tools_override=[],
+                instructions_override=instructions,
+            )
+            self._raise_for_failed_response(response)
+            output_text, _, _, _ = self._extract_response_payload(response)
+            parsed = self._parse_json_object(output_text)
+            candidates = parsed.get('memories', [])
+            if not isinstance(candidates, list):
+                candidates = []
+            min_confidence = float(os.environ.get('LABAGENT_LONG_MEMORY_MIN_CONFIDENCE', '0.72'))
+            saved = self.long_term_memory_store.upsert_candidates(
+                candidates,
+                session_id=session_id,
+                task_id=task_id,
+                min_confidence=min_confidence,
+            )
+            return {'saved': len(saved), 'candidates': len(candidates), 'memories': saved}
+        except Exception as exc:
+            return {'saved': 0, 'candidates': 0, 'error': str(exc)}
+
     def _get_response_output_items(self, response: Any) -> list[Any]:
-        output = getattr(response, 'output', None)
-        if output is None and isinstance(response, dict):
-            output = response.get('output')
-        return list(output or [])
+        # OpenAI SDK 的 responses.create() 默认返回 typed objects，这里只保留空值保护。
+        return list(getattr(response, 'output', None) or [])
 
     def _extract_response_tool_calls(self, response: Any) -> list[dict[str, Any]]:
         tool_calls: list[dict[str, Any]] = []
         for item in self._get_response_output_items(response):
-            item_type = getattr(item, 'type', None)
-            if item_type is None and isinstance(item, dict):
-                item_type = item.get('type')
-            if item_type != 'function_call':
+            if getattr(item, 'type', None) != 'function_call':
                 continue
-            name = getattr(item, 'name', None) if not isinstance(item, dict) else item.get('name')
-            arguments = getattr(item, 'arguments', None) if not isinstance(item, dict) else item.get('arguments')
-            call_id = getattr(item, 'call_id', None) if not isinstance(item, dict) else item.get('call_id')
+            name = getattr(item, 'name', None)
+            arguments = getattr(item, 'arguments', None)
+            call_id = getattr(item, 'call_id', None)
             if not name or not call_id:
                 continue
             tool_calls.append(
@@ -336,16 +566,13 @@ class LabAgent:
     def _extract_reasoning_text(self, response: Any) -> str:
         reasoning_parts: list[str] = []
         for item in self._get_response_output_items(response):
-            item_type = getattr(item, 'type', None)
-            if item_type is None and isinstance(item, dict):
-                item_type = item.get('type')
-            if item_type != 'reasoning':
+            if getattr(item, 'type', None) != 'reasoning':
                 continue
 
-            summary = getattr(item, 'summary', None) if not isinstance(item, dict) else item.get('summary')
+            summary = getattr(item, 'summary', None)
             if isinstance(summary, list):
                 for summary_item in summary:
-                    text = getattr(summary_item, 'text', None) if not isinstance(summary_item, dict) else summary_item.get('text')
+                    text = getattr(summary_item, 'text', None)
                     if text:
                         reasoning_parts.append(str(text))
         return '\n'.join(part for part in reasoning_parts if part).strip()
@@ -356,33 +583,28 @@ class LabAgent:
         final_content: list[dict[str, Any]] = []
 
         for item in self._get_response_output_items(response):
-            item_type = getattr(item, 'type', None)
-            if item_type is None and isinstance(item, dict):
-                item_type = item.get('type')
-            if item_type != 'message':
+            if getattr(item, 'type', None) != 'message':
                 continue
 
-            content_items = getattr(item, 'content', None) if not isinstance(item, dict) else item.get('content')
+            content_items = getattr(item, 'content', None)
             for content_item in content_items or []:
                 content_type = getattr(content_item, 'type', None)
-                if content_type is None and isinstance(content_item, dict):
-                    content_type = content_item.get('type')
 
                 if content_type == 'output_text':
-                    text = getattr(content_item, 'text', None) if not isinstance(content_item, dict) else content_item.get('text')
+                    text = getattr(content_item, 'text', None)
                     if text:
                         if not final_text:
                             final_text = str(text)
                         final_content.append({'type': 'text', 'text': str(text)})
                 elif content_type == 'input_text':
-                    text = getattr(content_item, 'text', None) if not isinstance(content_item, dict) else content_item.get('text')
+                    text = getattr(content_item, 'text', None)
                     if text:
                         if not final_text:
                             final_text = str(text)
                         final_content.append({'type': 'text', 'text': str(text)})
                 elif content_type == 'image_url':
-                    image_url = getattr(content_item, 'image_url', None) if not isinstance(content_item, dict) else content_item.get('image_url')
-                    url = getattr(image_url, 'url', None) if image_url is not None and not isinstance(image_url, dict) else (image_url or {}).get('url')
+                    image_url = getattr(content_item, 'image_url', None)
+                    url = getattr(image_url, 'url', None) if image_url is not None else None
                     if url:
                         final_images.append(str(url))
                         final_content.append({'type': 'image_url', 'image_url': {'url': str(url)}})
@@ -391,6 +613,21 @@ class LabAgent:
             final_content = [{'type': 'text', 'text': final_text}]
 
         return final_text, final_images, final_content, self._extract_reasoning_text(response)
+
+    def _extract_generated_image_asset(self, tool_output: str) -> dict[str, Any] | None:
+        try:
+            payload = json.loads(tool_output)
+        except json.JSONDecodeError:
+            return None
+        if not isinstance(payload, dict):
+            return None
+        if payload.get('type') != 'generated_image':
+            return None
+        image_url = str(payload.get('image_url', '') or '').strip()
+        path = str(payload.get('path', '') or '').strip()
+        if not image_url and not path:
+            return None
+        return payload
 
     def _resolve_infer_pythons(self, base_dir: Path) -> list[Path]:
         candidates = [Path(sys.executable)]
@@ -423,7 +660,27 @@ class LabAgent:
             content = doc['content']
             if len(content) > max_chars_per_doc:
                 content = content[:max_chars_per_doc].rstrip() + '...'
-            rendered_docs.append(f"[来源: {doc['source']}]\n{content}")
+            source_parts = [f"来源: {doc['source']}"]
+            file_type = str(doc.get('file_type', '')).strip()
+            if file_type:
+                source_parts.append(f"类型: {file_type}")
+            record_type = str(doc.get('record_type', '')).strip()
+            if record_type == 'image_proxy':
+                source_parts.append('命中: 图片代理')
+            page_index = doc.get('page_index')
+            if isinstance(page_index, int):
+                source_parts.append(f"页码: {page_index + 1}")
+            extra_lines: list[str] = []
+            image_index = doc.get('image_index')
+            if isinstance(image_index, int):
+                extra_lines.append(f"图片序号: {image_index + 1}")
+            asset_path = str(doc.get('asset_path', '') or '').strip()
+            if asset_path:
+                extra_lines.append(f"图片路径: {asset_path}")
+            rendered = f"[{' | '.join(source_parts)}]\n{content}"
+            if extra_lines:
+                rendered = f"{rendered}\n" + "\n".join(extra_lines)
+            rendered_docs.append(rendered)
         return '\n\n'.join(rendered_docs)
 
     def _run_digit_inference(self, args: dict[str, Any]) -> str:
@@ -484,6 +741,60 @@ class LabAgent:
         except Exception as e:
             return json.dumps({'error': f'天气工具调用失败: {e}'}, ensure_ascii=False)
 
+    def _run_generate_image(self, args: dict[str, Any]) -> str:
+        prompt = str(args.get('prompt', '')).strip()
+        if not prompt:
+            return json.dumps({'error': 'Missing required argument: prompt'}, ensure_ascii=False)
+        try:
+            result = self.image_service.generate(
+                prompt=prompt,
+                aspect_ratio=str(args.get('aspect_ratio', '') or '').strip() or None,
+                size=str(args.get('size', '') or '').strip() or None,
+                image_size=str(args.get('image_size', '') or '').strip() or None,
+                output_format=str(args.get('output_format', '') or '').strip() or None,
+            )
+            return json.dumps(result, ensure_ascii=False)
+        except Exception as e:
+            return json.dumps({'error': f'图片生成工具调用失败: {e}'}, ensure_ascii=False)
+
+    def _run_edit_image(self, args: dict[str, Any]) -> str:
+        instruction = str(args.get('instruction', '')).strip()
+        if not instruction:
+            return json.dumps({'error': 'Missing required argument: instruction'}, ensure_ascii=False)
+
+        source_path_value = str(args.get('source_image_path', '') or '').strip()
+        latest_image = args.get('_latest_generated_image')
+        if not source_path_value and isinstance(latest_image, dict):
+            source_path_value = str(latest_image.get('path', '') or '').strip()
+
+        if not source_path_value:
+            return json.dumps(
+                {'error': '没有找到可编辑的上一张图片，请先生成图片或提供 source_image_path。'},
+                ensure_ascii=False,
+            )
+
+        try:
+            source_path = self._resolve_project_path(source_path_value)
+        except ValueError as e:
+            return json.dumps({'error': str(e)}, ensure_ascii=False)
+        if not source_path.exists() or not source_path.is_file():
+            return json.dumps({'error': f'Source image not found: {source_path}'}, ensure_ascii=False)
+
+        try:
+            result = self.image_service.edit(
+                source_image_path=source_path,
+                instruction=instruction,
+                aspect_ratio=str(args.get('aspect_ratio', '') or '').strip() or None,
+                size=str(args.get('size', '') or '').strip() or None,
+                image_size=str(args.get('image_size', '') or '').strip() or None,
+                output_format=str(args.get('output_format', '') or '').strip() or None,
+            )
+            if isinstance(latest_image, dict):
+                result['source_image_id'] = latest_image.get('image_id', '')
+            return json.dumps(result, ensure_ascii=False)
+        except Exception as e:
+            return json.dumps({'error': f'图片编辑工具调用失败: {e}'}, ensure_ascii=False)
+
     def _run_load_skill(self, args: dict[str, Any]) -> str:
         if self.skill_loader is None:
             return json.dumps({'error': 'Skill loader unavailable'}, ensure_ascii=False)
@@ -521,6 +832,76 @@ class LabAgent:
                 'path': str(target),
                 'truncated': truncated,
                 'content': content,
+            },
+            ensure_ascii=False,
+        )
+
+    def _run_write_file(self, args: dict[str, Any]) -> str:
+        path_value = str(args.get('path', '')).strip()
+        if not path_value:
+            return json.dumps({'error': 'Missing required argument: path'}, ensure_ascii=False)
+        if 'content' not in args:
+            return json.dumps({'error': 'Missing required argument: content'}, ensure_ascii=False)
+
+        try:
+            target = self._resolve_project_path(path_value)
+        except ValueError as e:
+            return json.dumps({'error': str(e)}, ensure_ascii=False)
+
+        if target.exists() and target.is_dir():
+            return json.dumps({'error': f'Path is a directory: {target}'}, ensure_ascii=False)
+
+        content = str(args.get('content', ''))
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding='utf-8')
+        return json.dumps(
+            {
+                'path': str(target),
+                'bytes_written': len(content.encode('utf-8')),
+                'chars_written': len(content),
+            },
+            ensure_ascii=False,
+        )
+
+    def _run_edit_file(self, args: dict[str, Any]) -> str:
+        path_value = str(args.get('path', '')).strip()
+        if not path_value:
+            return json.dumps({'error': 'Missing required argument: path'}, ensure_ascii=False)
+        if 'old_text' not in args:
+            return json.dumps({'error': 'Missing required argument: old_text'}, ensure_ascii=False)
+        if 'new_text' not in args:
+            return json.dumps({'error': 'Missing required argument: new_text'}, ensure_ascii=False)
+
+        try:
+            target = self._resolve_project_path(path_value)
+        except ValueError as e:
+            return json.dumps({'error': str(e)}, ensure_ascii=False)
+
+        if not target.exists():
+            return json.dumps({'error': f'File not found: {target}'}, ensure_ascii=False)
+        if target.is_dir():
+            return json.dumps({'error': f'Path is a directory: {target}'}, ensure_ascii=False)
+
+        old_text = str(args.get('old_text', ''))
+        new_text = str(args.get('new_text', ''))
+        content = target.read_text(encoding='utf-8', errors='replace')
+        occurrences = content.count(old_text)
+        if occurrences == 0:
+            return json.dumps(
+                {
+                    'error': 'Target text not found.',
+                    'path': str(target),
+                },
+                ensure_ascii=False,
+            )
+
+        updated = content.replace(old_text, new_text, 1)
+        target.write_text(updated, encoding='utf-8')
+        return json.dumps(
+            {
+                'path': str(target),
+                'replaced': 1,
+                'occurrences_found': occurrences,
             },
             ensure_ascii=False,
         )
@@ -720,10 +1101,16 @@ class LabAgent:
         task_id: str | None = None,
     ) -> Generator[dict[str, Any], None, None]:
         conversation_items = self._prepare_messages_for_responses(messages)
+        context_items: list[dict[str, Any]] = []
+        long_term_memory_context = self._build_long_term_memory_context(messages)
+        if long_term_memory_context:
+            context_items.append({'role': 'user', 'content': long_term_memory_context})
         if self._is_memory_injection_enabled() and session_store and session_id:
             memory_context = self._build_memory_context(session_store, session_id, messages)
             if memory_context:
-                conversation_items.insert(0, {'role': 'user', 'content': memory_context})
+                context_items.append({'role': 'user', 'content': memory_context})
+        if context_items:
+            conversation_items = context_items + conversation_items
         try:
             extra_params: dict[str, Any] = {}
             if reasoning_mode and supports_thinking:
@@ -735,6 +1122,7 @@ class LabAgent:
             total_usage = self._parse_usage(getattr(response, 'usage', None))
             current_tool_calls = self._extract_response_tool_calls(response)
             tool_round = 0
+            tool_image_urls: list[str] = []
 
             while current_tool_calls and tool_round < self.max_tool_rounds:
                 tool_round += 1
@@ -749,20 +1137,32 @@ class LabAgent:
                 for tool_call in current_tool_calls:
                     func_name = tool_call['name']
                     args = json.loads(tool_call['arguments'])
-                    yield {'type': 'tool_exec', 'tool': func_name, 'input': json.dumps(args, ensure_ascii=False)}
+                    display_args = dict(args)
+                    if func_name == 'edit_image' and session_store and session_id:
+                        latest_image = session_store.get_latest_generated_image(session_id)
+                        if latest_image:
+                            args['_latest_generated_image'] = latest_image
+                    yield {'type': 'tool_exec', 'tool': func_name, 'input': json.dumps(display_args, ensure_ascii=False)}
                     tool_output = (
                         self.tool_registry.execute(func_name, args)
                         if self.tool_registry
                         else json.dumps({'error': 'Tool registry unavailable'}, ensure_ascii=False)
                     )
                     yield {'type': 'tool_result', 'output': tool_output}
+                    generated_image_asset = self._extract_generated_image_asset(tool_output)
+                    if generated_image_asset:
+                        image_url = str(generated_image_asset.get('image_url', '') or '').strip()
+                        if image_url:
+                            tool_image_urls.append(image_url)
+                        if session_store and session_id:
+                            session_store.append_generated_image(session_id, generated_image_asset)
                     if session_store and session_id and task_id:
                         session_store.append_tool_event(
                             session_id,
                             task_id,
                             {
                                 'tool': func_name,
-                                'args': args,
+                                'args': display_args,
                                 'tool_round': tool_round,
                                 'output_preview': tool_output[:400],
                             },
@@ -800,6 +1200,11 @@ class LabAgent:
                 current_tool_calls = self._extract_response_tool_calls(response)
 
             final_text, final_images, final_content, final_reasoning = self._extract_response_payload(response)
+            for image_url in tool_image_urls:
+                if image_url in final_images:
+                    continue
+                final_images.append(image_url)
+                final_content.append({'type': 'image_url', 'image_url': {'url': image_url}})
 
             if current_tool_calls and tool_round >= self.max_tool_rounds:
                 limit_note = (

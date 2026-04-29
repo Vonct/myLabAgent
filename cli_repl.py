@@ -42,7 +42,7 @@ class CliRepl:
             return
 
         if len(parts) < 2:
-            self.renderer.print_markdown('用法：`/add2lib <pdf路径>`')
+            self.renderer.print_markdown('用法：`/add2lib <文档路径>`')
             return
 
         raw_path = parts[1]
@@ -57,8 +57,9 @@ class CliRepl:
         if not file_path.is_file():
             self.renderer.print_markdown(f'目标不是文件：`{file_path}`')
             return
-        if file_path.suffix.lower() != '.pdf':
-            self.renderer.print_markdown('当前 `/add2lib` 与 web 端保持一致，只支持 `PDF` 文件。')
+        supported_suffixes = {'.pdf', '.txt', '.md', '.docx'}
+        if file_path.suffix.lower() not in supported_suffixes:
+            self.renderer.print_markdown('当前 `/add2lib` 支持 `PDF / TXT / MD / DOCX` 文件。')
             return
 
         rag_engine = getattr(self.agent, 'rag', None)
@@ -193,6 +194,14 @@ class CliRepl:
                 answer=text_to_persist,
                 tool_events=task_record.get('tool_events', []),
                 has_image=False,
+                status=task_status,
+            )
+            self.agent.record_long_term_memory(
+                prompt=user_text,
+                answer=text_to_persist,
+                tool_events=task_record.get('tool_events', []),
+                session_id=self.session_id,
+                task_id=task.task_id,
                 status=task_status,
             )
             self.renderer.finish_turn(status=task_status, memory_saved=True)

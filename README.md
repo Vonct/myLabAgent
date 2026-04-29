@@ -43,8 +43,12 @@
 - `retrieve_document`
 - `recognize_handwritten_digit`
 - `get_amap_weather`
+- `generate_image`
+- `edit_image`
 - `load_skill`
 - `read_file`
+- `write_file`
+- `edit_file`
 - `grep_search`
 - `run_shell_command`
 - `run_subagent`
@@ -133,7 +137,7 @@ python cli.py session-list
 - `/session`
 - `/models`：从 `vip_config.json` 读取可选模型，方向键移动，空格选中，回车确认
 - `/skills`
-- `/add2lib <pdf路径>`：把本地 PDF 按和 Web 端一致的流程导入知识库
+- `/add2lib <文档路径>`：把本地 PDF / TXT / MD / DOCX 按和 Web 端一致的流程导入知识库
 - `/exit`
 
 CLI 支持的常用参数：
@@ -147,6 +151,15 @@ CLI 支持的常用参数：
 - `--sandbox`
 - `--reasoning`
 - `--max-tool-rounds`
+
+图片生成工具默认使用 OpenRouter：
+
+- `LABAGENT_IMAGE_API_KEY` 或 `OPENROUTER_API_KEY`：图片模型 API Key
+- `LABAGENT_IMAGE_MODEL`：图片模型，默认 `openai/gpt-5.4-image-2`
+- `LABAGENT_IMAGE_BASE_URL`：默认 `https://openrouter.ai/api/v1`
+- `LABAGENT_IMAGE_API_MODE`：默认 `responses`，如需兼容可设为 `chat_completions`
+
+图片 tool 支持 `aspect_ratio` 作为便利用法，但 OpenAI GPT Image 官方参数更接近 `size`；实现会把常见比例映射到 `1024x1024`、`1536x1024`、`1024x1536` 等尺寸。
 
 ## 配置来源
 
@@ -179,6 +192,7 @@ app_data/sessions/YYYY_MM_DD/<session_id>.json
 - `messages`
 - `tasks`
 - `memories`
+- `generated_images`
 
 其中 `messages` 现在保存的是 `canonical message`，而不是 UI 专用消息。也就是说：
 
@@ -219,4 +233,4 @@ CLI 目前通过 `--sandbox` 选择运行模式。
 
 ## 相关文档
 
-- [TECH_INTERACTION.md](D:\tongjiLabAgent\myLabAgent\TECH_INTERACTION.md)
+- [TECH_INTERACTION.md](TECH_INTERACTION.md)

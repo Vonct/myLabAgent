@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from agent_core import LabAgent
+from core.long_term_memory import LongTermMemoryStore
 from core.permissions import PermissionLevel, PermissionManager
 from core.prompt_loader import load_prompt
 from core.skill_loader import SkillLoader
@@ -44,6 +45,10 @@ def build_agent_runtime(
     max_tool_rounds: int = 4,
 ) -> tuple[RAGEngine, LabAgent]:
     rag_engine = RAGEngine(embedding_api_key, embedding_base_url, embedding_model)
+    long_term_memory_store = LongTermMemoryStore(
+        project_root=project_root,
+        embedding_function=rag_engine.embedding_function,
+    )
     permission_manager = PermissionManager(_resolve_allowed_permissions(permission_mode))
     tool_registry = ToolRegistry(project_root / 'config' / 'tools.json', permission_manager)
     skill_loader = SkillLoader(project_root / '.agent_skills' / 'skills')
@@ -59,5 +64,6 @@ def build_agent_runtime(
         max_tool_rounds=max_tool_rounds,
         project_root=project_root,
         extra_body_for_thinking=llm_extra_body_for_thinking,
+        long_term_memory_store=long_term_memory_store,
     )
     return rag_engine, agent

@@ -327,6 +327,14 @@ def render_chat_tab(
                         has_image=bool(send_image_path),
                         status='completed',
                     )
+                    st.session_state.agent.record_long_term_memory(
+                        prompt=display_content,
+                        answer=task_result,
+                        tool_events=task_record.get('tool_events', []),
+                        session_id=st.session_state.session_id,
+                        task_id=task_id,
+                        status='completed',
+                    )
                 except Exception as e:
                     session_store.finish_task(st.session_state.session_id, task_id, str(e), status='failed')
                     task_record = session_store.get_task(st.session_state.session_id, task_id) or {}

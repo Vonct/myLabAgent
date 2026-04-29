@@ -51,6 +51,7 @@ class SessionStore:
             "messages": [],
             "tasks": [],
             "memories": [],
+            "generated_images": [],
         }
         self._write_session(payload)
         return payload
@@ -67,6 +68,7 @@ class SessionStore:
         if payload is None:
             return
         payload.setdefault("memories", [])
+        payload.setdefault("generated_images", [])
         payload["messages"].append(message)
         payload["updated_at"] = _utc_now()
         self._write_session(payload)
@@ -76,6 +78,7 @@ class SessionStore:
         if payload is None:
             payload = self.create_session()
         payload.setdefault("memories", [])
+        payload.setdefault("generated_images", [])
         task = TaskRecord(task_id=uuid4().hex, prompt=prompt)
         payload["tasks"].append(task.__dict__)
         payload["updated_at"] = _utc_now()
@@ -87,6 +90,7 @@ class SessionStore:
         if payload is None:
             return
         payload.setdefault("memories", [])
+        payload.setdefault("generated_images", [])
         for task in payload["tasks"]:
             if task["task_id"] == task_id:
                 task["tool_events"].append(event)
@@ -100,6 +104,7 @@ class SessionStore:
         if payload is None:
             return
         payload.setdefault("memories", [])
+        payload.setdefault("generated_images", [])
         for task in payload["tasks"]:
             if task["task_id"] == task_id:
                 task["status"] = status
@@ -123,12 +128,42 @@ class SessionStore:
         if payload is None:
             return
         payload.setdefault("memories", [])
+        payload.setdefault("generated_images", [])
         payload["memories"].append(memory)
         payload["updated_at"] = _utc_now()
         self._write_session(payload)
 
+    def append_generated_image(self, session_id: str, image_asset: dict[str, Any]) -> None:
+        payload = self.load_session(session_id)
+        if payload is None:
+            return
+        payload.setdefault("memories", [])
+        payload.setdefault("generated_images", [])
+        stored_asset = {
+            key: value
+            for key, value in image_asset.items()
+            if key not in {"image_url", "data_url"}
+        }
+        stored_asset.setdefault("created_at", _utc_now())
+        payload["generated_images"].append(stored_asset)
+        payload["updated_at"] = _utc_now()
+        self._write_session(payload)
+
+    def get_latest_generated_image(self, session_id: str) -> dict[str, Any] | None:
+        payload = self.load_session(session_id)
+        if payload is None:
+            return None
+        images = payload.get("generated_images", [])
+        if not isinstance(images, list) or not images:
+            return None
+        for image_asset in reversed(images):
+            if isinstance(image_asset, dict):
+                return image_asset
+        return None
+
     def _write_session(self, payload: dict[str, Any]) -> None:
         payload.setdefault("memories", [])
+        payload.setdefault("generated_images", [])
         path = self._resolve_session_path(
             payload["session_id"],
             created_at=payload.get("created_at", ""),
