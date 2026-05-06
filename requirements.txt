@@ -11,3 +11,4 @@ rich
 prompt_toolkit
 fastapi
 uvicorn
+langgraph

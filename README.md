@@ -14,6 +14,7 @@
 - `app.py`：Web 入口，负责 Streamlit 页面装配
 - `cli.py`：CLI 入口，支持单轮命令和多轮 REPL
 - `agent_core.py`：核心 Agent loop，负责模型调用和 tool-calling 闭环
+- `core/agent_graph.py`：LangGraph 状态图，负责主对话 loop 编排
 - `core/model_adapter.py`：主模型调用适配层，负责 `responses` / `chat_completions` 协议转换
 - `services/agent_factory.py`：共享 runtime 工厂
 - `services/session_service.py`：session 高层封装

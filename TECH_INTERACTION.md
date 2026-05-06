@@ -251,6 +251,31 @@ VIP 配置中可以按模型指定：
 }
 ```
 
+## LangGraph Agent Loop
+
+主对话 loop 已从 `agent_core.py` 里的手写 `while tool_calls` 迁移到 `core/agent_graph.py`：
+
+```text
+prepare_context -> call_model -> tools -> call_model -> ... -> finalize
+```
+
+状态集中在 `AgentGraphState`：
+
+- `messages`：外部 session transcript。
+- `input_items`：进入 `ModelAdapter` 前的内部 Responses 风格输入。
+- `previous_response_id`：Responses API 的服务端 continuation id；Chat Completions 模式下为空，自动走本地 transcript replay。
+- `tool_calls` / `tool_round`：工具循环状态。
+- `total_usage`：多轮模型调用的 token 汇总。
+- `events`：节点产生的 UI/CLI 事件，如 `thought`、`tool_exec`、`tool_result`、`answer_chunk`、`final_message`。
+
+`agent_core.chat(...)` 现在只负责初始化 graph state、调用 `self.agent_graph.stream(..., stream_mode="updates")`，并把节点返回的 `events` 继续 yield 给现有 Streamlit、CLI、API 入口。这样 UI 层不用知道底层 loop 已经变成 LangGraph。
+
+当前迁移边界：
+
+- 保留 `ModelAdapter`，LangGraph 不直接关心 `responses` / `chat_completions`。
+- 保留 `ToolRegistry` 和 `PermissionManager`，暂不迁移到 LangChain `ToolNode`。
+- 保留原来的长期记忆注入、session memory 注入、工具结果回填、图片资产保存逻辑，只是把它们挪到 graph node 中。
+
 ## OpenAI Responses API 结论
 
 OpenAI 官方图片文档确认，GPT Image 2 / GPT Image 系列可以通过 Responses API 使用图片生成能力。因此项目设计优先采用 Responses 形态；OpenRouter 侧保留 Chat Completions 兼容模式只是为了供应商兼容兜底，不是主设计方向。

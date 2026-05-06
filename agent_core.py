@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Generator
 
 from amap_mcp_adapter import AMapMCPAdapter, DEFAULT_AMAP_MCP_COMMAND
+from core.agent_graph import build_agent_graph
 from core.canonical_message import extract_message_text
 from core.long_term_memory import LongTermMemoryStore
 from core.model_adapter import ModelAdapter
@@ -116,6 +117,7 @@ class LabAgent:
             )
         self.tools = self.tool_registry.get_openai_schemas() if self.tool_registry else []
         self.response_tools = self._build_response_tools(self.tools)
+        self.agent_graph = build_agent_graph(self)
 
     def _resolve_reasoning_extra_body(self) -> dict[str, Any]:
         if self.extra_body_for_thinking:
@@ -1101,145 +1103,35 @@ class LabAgent:
         session_id: str | None = None,
         task_id: str | None = None,
     ) -> Generator[dict[str, Any], None, None]:
-        conversation_items = self._prepare_messages_for_responses(messages)
-        context_items: list[dict[str, Any]] = []
-        long_term_memory_context = self._build_long_term_memory_context(messages)
-        if long_term_memory_context:
-            context_items.append({'role': 'user', 'content': long_term_memory_context})
-        if self._is_memory_injection_enabled() and session_store and session_id:
-            memory_context = self._build_memory_context(session_store, session_id, messages)
-            if memory_context:
-                context_items.append({'role': 'user', 'content': memory_context})
-        if context_items:
-            conversation_items = context_items + conversation_items
         try:
             extra_params: dict[str, Any] = {}
             if reasoning_mode and supports_thinking:
                 extra_params['extra_body'] = self._resolve_reasoning_extra_body()
-
-            response = self._create_response(conversation_items, extra_params)
-            self._raise_for_failed_response(response)
-            previous_response_id = self._get_response_id(response)
-            total_usage = self._parse_usage(getattr(response, 'usage', None))
-            current_tool_calls = self._extract_response_tool_calls(response)
-            tool_round = 0
-            tool_image_urls: list[str] = []
-
-            while current_tool_calls and tool_round < self.max_tool_rounds:
-                tool_round += 1
-                if tool_round == 1:
-                    thought = '正在分析问题并准备调用工具...'
-                else:
-                    thought = f'正在继续执行第 {tool_round} 轮工具调用...'
-                yield {'type': 'thought', 'content': thought}
-
-                tool_outputs: list[dict[str, Any]] = []
-
-                for tool_call in current_tool_calls:
-                    func_name = tool_call['name']
-                    args = json.loads(tool_call['arguments'])
-                    display_args = dict(args)
-                    if func_name == 'edit_image' and session_store and session_id:
-                        latest_image = session_store.get_latest_generated_image(session_id)
-                        if latest_image:
-                            args['_latest_generated_image'] = latest_image
-                    yield {'type': 'tool_exec', 'tool': func_name, 'input': json.dumps(display_args, ensure_ascii=False)}
-                    tool_output = (
-                        self.tool_registry.execute(func_name, args)
-                        if self.tool_registry
-                        else json.dumps({'error': 'Tool registry unavailable'}, ensure_ascii=False)
-                    )
-                    yield {'type': 'tool_result', 'output': tool_output}
-                    generated_image_asset = self._extract_generated_image_asset(tool_output)
-                    if generated_image_asset:
-                        image_url = str(generated_image_asset.get('image_url', '') or '').strip()
-                        if image_url:
-                            tool_image_urls.append(image_url)
-                        if session_store and session_id:
-                            session_store.append_generated_image(session_id, generated_image_asset)
-                    if session_store and session_id and task_id:
-                        session_store.append_tool_event(
-                            session_id,
-                            task_id,
-                            {
-                                'tool': func_name,
-                                'args': display_args,
-                                'tool_round': tool_round,
-                                'output_preview': tool_output[:400],
-                            },
-                        )
-                    tool_outputs.append(
-                        {
-                            'type': 'function_call_output',
-                            'call_id': tool_call['call_id'],
-                            'output': tool_output,
-                        }
-                    )
-                # Prefer server-side continuation via previous_response_id.
-                # Fallback to local transcript replay if response id is unavailable.
-                if previous_response_id:
-                    response = self._create_response(
-                        tool_outputs,
-                        extra_params,
-                        previous_response_id=previous_response_id,
-                    )
-                else:
-                    for tool_call in current_tool_calls:
-                        conversation_items.append(
-                            {
-                                'type': 'function_call',
-                                'name': tool_call['name'],
-                                'arguments': tool_call['arguments'],
-                                'call_id': tool_call['call_id'],
-                            }
-                        )
-                    conversation_items.extend(tool_outputs)
-                    response = self._create_response(conversation_items, extra_params)
-                self._raise_for_failed_response(response)
-                previous_response_id = self._get_response_id(response)
-                total_usage = self._merge_usage(total_usage, self._parse_usage(getattr(response, 'usage', None)))
-                current_tool_calls = self._extract_response_tool_calls(response)
-
-            final_text, final_images, final_content, final_reasoning = self._extract_response_payload(response)
-            for image_url in tool_image_urls:
-                if image_url in final_images:
-                    continue
-                final_images.append(image_url)
-                final_content.append({'type': 'image_url', 'image_url': {'url': image_url}})
-
-            if current_tool_calls and tool_round >= self.max_tool_rounds:
-                limit_note = (
-                    f'已达到当前代理的最大工具轮数限制（{self.max_tool_rounds} 轮）。'
-                    ' 如果任务仍未完成，请继续细化提示，或提高工具轮数上限。'
-                )
-                final_text = f'{limit_note}\n\n{final_text}'.strip()
-                if final_content and final_content[0].get('type') == 'text':
-                    original = final_content[0].get('text') or final_content[0].get('content') or ''
-                    final_content[0]['text'] = f'{limit_note}\n\n{original}'.strip()
-                else:
-                    final_content.insert(0, {'type': 'text', 'text': limit_note})
-
-            if final_reasoning:
-                yield {'type': 'reasoning', 'content': final_reasoning}
-
-            usage_suffix = self._usage_suffix(total_usage)
-            text_for_display = final_text
-            if text_for_display:
-                text_for_display += usage_suffix
-            elif not final_images:
-                text_for_display = '模型本轮没有返回可见文本，请重试或切换模型。' + usage_suffix
-                final_content = [{'type': 'text', 'text': text_for_display}]
-
-            if text_for_display:
-                for i in range(0, len(text_for_display), 40):
-                    yield {'type': 'answer_chunk', 'content': text_for_display[i:i + 40]}
-
-            yield {
-                'type': 'final_message',
-                'content': final_content if final_content else [{'type': 'text', 'text': text_for_display}],
-                'display_content': text_for_display,
-                'images': final_images,
+            initial_state = {
+                'messages': messages,
+                'input_items': [],
+                'extra_params': extra_params,
+                'previous_response_id': '',
+                'response': None,
+                'tool_calls': [],
+                'tool_round': 0,
+                'total_usage': {'input_tokens': 0, 'output_tokens': 0, 'total_tokens': 0},
+                'tool_image_urls': [],
+                'final_text': '',
+                'final_images': [],
+                'final_content': [],
+                'final_reasoning': '',
+                'events': [],
+                'session_store': session_store,
+                'session_id': session_id,
+                'task_id': task_id,
             }
+            for update in self.agent_graph.stream(initial_state, stream_mode='updates'):
+                for node_update in update.values():
+                    if not isinstance(node_update, dict):
+                        continue
+                    for event in node_update.get('events', []) or []:
+                        yield event
         except Exception as e:
             if 'timed out' in str(e).lower():
                 message = (
