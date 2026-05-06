@@ -36,6 +36,7 @@ def render_sidebar(
         selected_embedding_model = ""
         selected_llm_capabilities = {"supports_image_input": False, "supports_thinking": False}
         selected_llm_extra_body_for_thinking = None
+        selected_llm_api_mode = "responses"
         effective_llm_api_key = ""
         effective_llm_base_url = default_llm_base_url
         effective_embedding_api_key = ""
@@ -57,6 +58,13 @@ def render_sidebar(
                 default_embedding_base_url,
             )
             effective_llm_api_key = st.text_input("LLM API Key", type="password")
+            selected_llm_api_mode = st.selectbox(
+                "LLM API 模式",
+                options=["responses", "chat_completions"],
+                index=0,
+                key="manual_llm_api_mode",
+                help="Responses API 不可用的 OpenAI-compatible 模型可切换为 chat_completions。",
+            )
             effective_embedding_api_key = st.text_input("Embedding API Key", type="password")
             st.session_state.vip_authenticated = False
             st.session_state.vip_username = ""
@@ -103,6 +111,7 @@ def render_sidebar(
                         selected_llm_conf,
                     )
                     selected_llm_extra_body_for_thinking = selected_llm_conf.get("extra_body_forThinking")
+                    selected_llm_api_mode = selected_llm_conf.get("api_mode", "responses")
                     effective_llm_api_key = selected_llm_conf.get("api_key", "")
                     effective_llm_base_url = selected_llm_conf.get("base_url") or resolve_model_base_url(
                         selected_llm_model,
@@ -138,6 +147,7 @@ def render_sidebar(
         pending_config = (
             effective_llm_base_url,
             selected_llm_model,
+            selected_llm_api_mode,
             selected_embedding_model,
             effective_llm_api_key,
             json.dumps(selected_llm_extra_body_for_thinking, ensure_ascii=False, sort_keys=True)
@@ -159,6 +169,7 @@ def render_sidebar(
                     effective_llm_base_url,
                     selected_llm_model,
                     selected_llm_extra_body_for_thinking,
+                    selected_llm_api_mode,
                     effective_embedding_api_key,
                     effective_embedding_base_url,
                     selected_embedding_model,

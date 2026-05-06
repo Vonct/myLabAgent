@@ -7,12 +7,14 @@
         "qwen3.5-plus": {
           "api_key": "sk-your-dashscope-key",
           "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+          "api_mode": "responses",
           "supports_image_input": true,
           "supports_thinking": true
         },
         "MiniMax-M2.5": {
           "api_key": "sk-your-minimax-key",
           "base_url": "https://api.minimaxi.com/v1",
+          "api_mode": "chat_completions",
           "supports_image_input": false,
           "supports_thinking": false
         }

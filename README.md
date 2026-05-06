@@ -1,6 +1,6 @@
 ﻿# myLabAgent
 
-`myLabAgent` 是一个基于 `OpenAI SDK 兼容接口` 的实验室 Agent 项目，当前主链路已经切换到 `Responses API`，同时支持两种交互入口：
+`myLabAgent` 是一个基于 `OpenAI SDK 兼容接口` 的实验室 Agent 项目，主链路内部保持 Responses 风格协议，并通过模型适配层兼容 `Responses API` 与 `Chat Completions API`，同时支持两种交互入口：
 
 1. `Web`，基于 `Streamlit`
 2. `CLI`，基于 `argparse + rich`
@@ -14,6 +14,7 @@
 - `app.py`：Web 入口，负责 Streamlit 页面装配
 - `cli.py`：CLI 入口，支持单轮命令和多轮 REPL
 - `agent_core.py`：核心 Agent loop，负责模型调用和 tool-calling 闭环
+- `core/model_adapter.py`：主模型调用适配层，负责 `responses` / `chat_completions` 协议转换
 - `services/agent_factory.py`：共享 runtime 工厂
 - `services/session_service.py`：session 高层封装
 - `core/canonical_message.py`：canonical message 构造、规范化与展示提取
@@ -28,7 +29,7 @@
 
 ### 1. 聊天问答
 - 多轮对话
-- OpenAI 兼容 `responses.create(...)` 调用
+- OpenAI 兼容 `responses.create(...)` / `chat.completions.create(...)` 调用
 - 工具调用闭环
 - 基础任务与 session 持久化
 

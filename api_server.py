@@ -121,6 +121,7 @@ def _build_runtime_args() -> argparse.Namespace:
         model='doubao-seed-2-0-lite-260215',
         base_url=None,
         api_key=None,
+        api_mode=None,
         embedding_model=None,
         embedding_base_url=None,
         embedding_api_key=None,
@@ -207,6 +208,7 @@ def health() -> dict[str, Any]:
     return {
         'ok': True,
         'model': getattr(runtime.agent, 'llm_model', 'unknown'),
+        'api_mode': getattr(runtime.agent, 'llm_api_mode', 'responses'),
         'supports_thinking': runtime.supports_thinking,
         'known_models': sorted(MODEL_CAPABILITIES.keys()),
         'public_base_url': runtime.public_base_url,

@@ -89,6 +89,16 @@ def _normalize_extra_body_for_thinking(value: Any) -> dict[str, Any] | None:
     return dict(value) if isinstance(value, dict) else None
 
 
+def _normalize_api_mode(value: Any) -> str:
+    normalized = str(value or 'responses').strip().lower()
+    chat_modes = {'chat', 'chat_completion', 'chat_completions', 'completion', 'completions'}
+    if normalized in chat_modes:
+        return 'chat_completions'
+    if normalized in {'response', 'responses'}:
+        return 'responses'
+    return normalized
+
+
 def _load_vip_profiles() -> dict[str, dict[str, Any]]:
     vip_config_path = _resolve_vip_config_path()
     if not vip_config_path.exists():
@@ -134,6 +144,12 @@ def _resolve_runtime_config(args, *, llm_model_override: str | None = None) -> d
 
     llm_api_key = args.api_key or os.environ.get('LABAGENT_API_KEY') or os.environ.get('OPENAI_API_KEY') or profile_llm.get('api_key', '')
     llm_base_url = args.base_url or os.environ.get('LABAGENT_BASE_URL') or profile_llm.get('base_url') or PRESET_LLM_BASE_URLS.get(llm_model, PRESET_LLM_BASE_URLS['qwen3.5-plus'])
+    llm_api_mode = _normalize_api_mode(
+        getattr(args, 'api_mode', None)
+        or os.environ.get('LABAGENT_API_MODE')
+        or profile_llm.get('api_mode')
+        or 'responses'
+    )
     embedding_api_key = (
         args.embedding_api_key
         or os.environ.get('LABAGENT_EMBEDDING_API_KEY')
@@ -157,6 +173,7 @@ def _resolve_runtime_config(args, *, llm_model_override: str | None = None) -> d
         'llm_api_key': llm_api_key,
         'llm_base_url': llm_base_url,
         'llm_model': llm_model,
+        'llm_api_mode': llm_api_mode,
         'llm_extra_body_for_thinking': extra_body_for_thinking,
         'embedding_api_key': embedding_api_key,
         'embedding_base_url': embedding_base_url,
@@ -175,6 +192,7 @@ def _build_common_parser() -> argparse.ArgumentParser:
     parser.add_argument('--model', default=None)
     parser.add_argument('--base-url', default=None)
     parser.add_argument('--api-key', default=None)
+    parser.add_argument('--api-mode', default=None, choices=['responses', 'chat_completions', 'chat'])
     parser.add_argument('--embedding-model', default=None)
     parser.add_argument('--embedding-base-url', default=None)
     parser.add_argument('--embedding-api-key', default=None)
@@ -186,7 +204,7 @@ def _build_common_parser() -> argparse.ArgumentParser:
 
 
 def _build_agent_from_config(config: dict[str, Any]):
-    _, agent = build_agent_runtime(**{k: config[k] for k in ['llm_api_key', 'llm_base_url', 'llm_model', 'llm_extra_body_for_thinking', 'embedding_api_key', 'embedding_base_url', 'embedding_model', 'project_root', 'permission_mode', 'max_tool_rounds']})
+    _, agent = build_agent_runtime(**{k: config[k] for k in ['llm_api_key', 'llm_base_url', 'llm_model', 'llm_api_mode', 'llm_extra_body_for_thinking', 'embedding_api_key', 'embedding_base_url', 'embedding_model', 'project_root', 'permission_mode', 'max_tool_rounds']})
     return agent
 
 

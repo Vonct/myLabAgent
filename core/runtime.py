@@ -108,11 +108,13 @@ def normalize_model_pool(raw_pool, model_capabilities: dict | None = None) -> di
             if isinstance(extra_body_for_thinking, dict):
                 item["extra_body_forThinking"] = dict(extra_body_for_thinking)
             if model_capabilities is not None:
+                item["api_mode"] = model_config.get("api_mode", "responses")
                 item.update(resolve_llm_capabilities(model_name, model_capabilities, model_config))
             normalized[model_name] = item
         elif isinstance(model_config, str):
             item = {"api_key": model_config, "base_url": ""}
             if model_capabilities is not None:
+                item["api_mode"] = "responses"
                 item.update(resolve_llm_capabilities(model_name, model_capabilities))
             normalized[model_name] = item
     return normalized
@@ -135,6 +137,7 @@ def resolve_vip_model_pools(
                 llm_pool[model_name] = {
                     "api_key": api_key,
                     "base_url": resolve_model_base_url(model_name, preset_llm_base_urls, default_llm_base_url),
+                    "api_mode": "responses",
                     **resolve_llm_capabilities(model_name, model_capabilities),
                 }
     if not llm_pool and profile.get("llm_model") and profile.get("api_key"):
@@ -142,6 +145,7 @@ def resolve_vip_model_pools(
         llm_pool[model_name] = {
             "api_key": profile.get("api_key", ""),
             "base_url": profile.get("base_url", resolve_model_base_url(model_name, preset_llm_base_urls, default_llm_base_url)),
+            "api_mode": profile.get("api_mode", "responses"),
             **resolve_llm_capabilities(model_name, model_capabilities, profile),
         }
     if not embedding_pool:

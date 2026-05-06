@@ -9,11 +9,10 @@ import sys
 from pathlib import Path
 from typing import Any, Generator
 
-from openai import OpenAI
-
 from amap_mcp_adapter import AMapMCPAdapter, DEFAULT_AMAP_MCP_COMMAND
 from core.canonical_message import extract_message_text
 from core.long_term_memory import LongTermMemoryStore
+from core.model_adapter import ModelAdapter
 from core.permissions import PermissionLevel
 from core.skill_loader import SkillLoader
 from core.tool_registry import ToolRegistry
@@ -48,12 +47,20 @@ class LabAgent:
         enable_subagent: bool = True,
         extra_body_for_thinking: dict[str, Any] | None = None,
         long_term_memory_store: LongTermMemoryStore | None = None,
+        llm_api_mode: str = 'responses',
     ):
         request_timeout = float(os.environ.get('LABCHAT_REQUEST_TIMEOUT', '180'))
-        self.client = OpenAI(api_key=api_key, base_url=base_url, timeout=request_timeout)
         self.api_key = api_key
         self.base_url = base_url
         self.llm_model = llm_model
+        self.model_adapter = ModelAdapter(
+            api_key=api_key,
+            base_url=base_url,
+            model=llm_model,
+            timeout=request_timeout,
+            api_mode=llm_api_mode,
+        )
+        self.llm_api_mode = self.model_adapter.api_mode
         self.rag = rag_engine
         self.request_timeout = request_timeout
         self.weather_adapter = AMapMCPAdapter(
@@ -145,20 +152,14 @@ class LabAgent:
         tools_override: list[dict[str, Any]] | None = None,
         instructions_override: str | None = None,
     ):
-        request_params: dict[str, Any] = {
-            'model': self.llm_model,
-            'input': input_items,
-            'stream': False,
-            'instructions': instructions_override or self.system_prompt,
-            **extra_params,
-        }
-        if previous_response_id:
-            request_params['previous_response_id'] = previous_response_id
         active_tools = self.response_tools if tools_override is None else tools_override
-        if active_tools:
-            request_params['tools'] = active_tools
-            request_params['tool_choice'] = 'auto'
-        return self.client.responses.create(**request_params)
+        return self.model_adapter.create(
+            input_items=input_items,
+            extra_params=extra_params,
+            previous_response_id=previous_response_id,
+            tools=active_tools,
+            instructions=instructions_override or self.system_prompt,
+        )
 
     def _get_response_id(self, response: Any) -> str:
         response_id = getattr(response, 'id', None)

@@ -213,6 +213,44 @@ POST https://openrouter.ai/api/v1/chat/completions
 modalities = ["image", "text"]
 ```
 
+## 主模型调用适配层
+
+主 Agent 内部仍然保持 Responses 风格的 canonical input：
+
+- 普通对话：`{"role": "user", "content": [{"type": "input_text", "text": "..."}]}`
+- 工具调用：`{"type": "function_call", "name": "...", "arguments": "...", "call_id": "..."}`
+- 工具结果：`{"type": "function_call_output", "call_id": "...", "output": "..."}`
+
+真正发给模型前统一经过 `core/model_adapter.py`。默认 `api_mode=responses` 时，适配器直接调用 `client.responses.create(...)`；当模型或供应商只支持 OpenAI Chat Completions 兼容接口时，将 `api_mode` 设置为 `chat_completions`，适配器会在边界层转换：
+
+- `input_text` / `output_text` / `text` 合并为 Chat message content。
+- `input_image` / `image_url` 转为 Chat Completions 的多模态 content part。
+- Responses 风格 function tool schema 转为 `{"type":"function","function":...}`。
+- `function_call` / `function_call_output` 转为 assistant `tool_calls` 和 tool message。
+- Chat Completions 返回值再规范化成带 `output` / `output_text` / `usage` 的轻量 Response 对象，供现有 Agent loop 继续解析。
+
+这样上层 tool loop、长期记忆 extractor、session 持久化都不需要知道底层到底走 `/responses` 还是 `/chat/completions`。配置入口：
+
+```bash
+export LABAGENT_API_MODE=chat_completions
+# 或 CLI:
+python cli.py ask --api-mode chat_completions "nihao"
+```
+
+VIP 配置中可以按模型指定：
+
+```json
+{
+  "llm_models": {
+    "mimo-v2.5-pro": {
+      "api_key": "sk-...",
+      "base_url": "https://example.com/v1",
+      "api_mode": "chat_completions"
+    }
+  }
+}
+```
+
 ## OpenAI Responses API 结论
 
 OpenAI 官方图片文档确认，GPT Image 2 / GPT Image 系列可以通过 Responses API 使用图片生成能力。因此项目设计优先采用 Responses 形态；OpenRouter 侧保留 Chat Completions 兼容模式只是为了供应商兼容兜底，不是主设计方向。
