@@ -133,7 +133,7 @@ def run_once(question: str, model: str, adapter: AMapMCPAdapter, enable_thinking
 
     first = client.responses.create(
         model=model,
-        instructions="你是一个天气助手。涉及天气时优先调用工具。",
+        instructions="你是一个综合性助手",
         input=messages,
         tools=TOOL_DEFS,
         tool_choice="auto",

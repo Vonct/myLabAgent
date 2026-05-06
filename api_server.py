@@ -13,7 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from cli import MODEL_CAPABILITIES, PROJECT_ROOT, SESSION_STORE, _build_agent_from_config, _resolve_runtime_config
-from core.canonical_message import extract_text_from_content
+from core.canonical_message import extract_image_urls_from_content, extract_text_from_content
 from core.session_store import SessionStore
 from core.prompt_loader import load_prompt
 from services.miniprogram_session_service import MiniprogramSessionService
@@ -64,6 +64,7 @@ class ChatResponse(BaseModel):
     task_id: str
     status: str
     final_text: str
+    images: list[str] = []
     thinking_text: str = ""
     tool_names: list[str]
     event_count: int
@@ -108,6 +109,7 @@ class MiniprogramChatResponse(BaseModel):
     task_id: str
     status: str
     final_text: str
+    images: list[str] = []
     thinking_text: str = ''
     tool_names: list[str]
     event_count: int
@@ -298,6 +300,7 @@ def chat(req: ChatRequest) -> ChatResponse:
             raise HTTPException(status_code=500, detail=detail)
 
     final_text = (extract_text_from_content(persisted_assistant_content) or ''.join(final_chunks)).strip()
+    final_images = extract_image_urls_from_content(persisted_assistant_content) if persisted_assistant_content is not None else []
     task_status = 'failed' if errored else 'completed'
 
     if persisted_assistant_content is not None:
@@ -315,12 +318,21 @@ def chat(req: ChatRequest) -> ChatResponse:
         has_image=False,
         status=task_status,
     )
+    runtime.agent.record_long_term_memory(
+        prompt=prompt,
+        answer=final_text,
+        tool_events=task_record.get('tool_events', []),
+        session_id=session_id,
+        task_id=task.task_id,
+        status=task_status,
+    )
 
     return ChatResponse(
         session_id=session_id,
         task_id=task.task_id,
         status=task_status,
         final_text=final_text,
+        images=final_images,
         thinking_text='\n\n'.join(part for part in thinking_parts if part).strip(),
         tool_names=tool_names,
         event_count=len(event_log) if req.debug_events else 0,
@@ -447,6 +459,7 @@ def miniprogram_chat(
             raise HTTPException(status_code=500, detail=detail)
 
     final_text = (extract_text_from_content(persisted_assistant_content) or ''.join(final_chunks)).strip()
+    final_images = extract_image_urls_from_content(persisted_assistant_content) if persisted_assistant_content is not None else []
     if persisted_assistant_content is not None:
         session_service.append_assistant_message(session_id, persisted_assistant_content)
     elif final_text:
@@ -462,6 +475,14 @@ def miniprogram_chat(
         has_image=False,
         status='completed',
     )
+    runtime.agent.record_long_term_memory(
+        prompt=task_prompt,
+        answer=final_text,
+        tool_events=task_record.get('tool_events', []),
+        session_id=session_id,
+        task_id=task.task_id,
+        status='completed',
+    )
 
     entry = runtime.miniprogram_session_service.get_space_entry(space_id) or {}
     return MiniprogramChatResponse(
@@ -471,6 +492,7 @@ def miniprogram_chat(
         task_id=task.task_id,
         status='completed',
         final_text=final_text,
+        images=final_images,
         thinking_text='\n\n'.join(part for part in thinking_parts if part).strip(),
         tool_names=tool_names,
         event_count=len(event_log) if req.debug_events else 0,

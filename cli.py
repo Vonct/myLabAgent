@@ -273,6 +273,14 @@ def _run_ask(args) -> int:
         has_image=False,
         status=task_status,
     )
+    agent.record_long_term_memory(
+        prompt=prompt,
+        answer=text_to_persist,
+        tool_events=task_record.get('tool_events', []),
+        session_id=session_id,
+        task_id=task.task_id,
+        status=task_status,
+    )
     renderer.finish_turn(status=task_status, memory_saved=True)
     return 1 if errored else 0
 

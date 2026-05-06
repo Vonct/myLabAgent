@@ -183,10 +183,10 @@ def render_sidebar(
         st.markdown("---")
         st.subheader("文档管理")
         uploaded_files = st.file_uploader(
-            "上传 PDF 文档",
-            type=["pdf"],
+            "上传文档",
+            type=["pdf", "txt", "md", "docx"],
             accept_multiple_files=True,
-            help="上传后会进入知识库并完成向量化。",
+            help="支持 PDF、TXT、Markdown、DOCX，上传后会进入知识库并完成向量化。",
         )
 
         if uploaded_files:

@@ -54,6 +54,68 @@
       "required": ["city"]
     }
   },
+  "generate_image": {
+    "description": "根据用户整理后的完整图片提示词生成图片。适合用户明确要求画图、生成海报、封面、插画、产品图、场景图等；不要把含糊的上下文原样传入，要先补全成独立可理解的图片 prompt。",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "prompt": {
+          "type": "string",
+          "description": "完整、可独立理解的图片生成提示词。应包含主体、风格、构图、颜色、背景、文字要求等关键细节。"
+        },
+        "aspect_ratio": {
+          "type": "string",
+          "description": "可选画幅比例，例如 1:1、16:9、9:16。注意这不是 OpenAI GPT Image 的原生参数；工具会尽量映射为 size。"
+        },
+        "size": {
+          "type": "string",
+          "description": "可选 OpenAI 风格图片尺寸，例如 1024x1024、1536x1024、1024x1536。优先级高于 aspect_ratio。"
+        },
+        "image_size": {
+          "type": "string",
+          "description": "可选供应商兼容字段，例如 1K、2K、4K，具体取决于 OpenRouter/图片模型支持。"
+        },
+        "output_format": {
+          "type": "string",
+          "description": "可选输出格式，例如 png、jpeg、webp。"
+        }
+      },
+      "required": ["prompt"]
+    }
+  },
+  "edit_image": {
+    "description": "编辑最近生成的图片或指定图片。适合用户说“把上一张图...”“背景改成...”“保持主体不变但...”等跟随式图片修改请求；如果没有显式 source_image_path，会自动使用当前会话最近生成的图片。",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "instruction": {
+          "type": "string",
+          "description": "图片编辑指令。应明确说明要改什么，并说明保留哪些主体、构图、风格或文字。"
+        },
+        "source_image_path": {
+          "type": "string",
+          "description": "可选源图片路径；不传时使用当前会话最近生成的图片。"
+        },
+        "aspect_ratio": {
+          "type": "string",
+          "description": "可选画幅比例；默认尽量保持源图比例。注意这不是 OpenAI GPT Image 的原生参数；工具会尽量映射为 size。"
+        },
+        "size": {
+          "type": "string",
+          "description": "可选 OpenAI 风格图片尺寸，例如 1024x1024、1536x1024、1024x1536。优先级高于 aspect_ratio。"
+        },
+        "image_size": {
+          "type": "string",
+          "description": "可选供应商兼容字段，例如 1K、2K、4K。"
+        },
+        "output_format": {
+          "type": "string",
+          "description": "可选输出格式，例如 png、jpeg、webp。"
+        }
+      },
+      "required": ["instruction"]
+    }
+  },
   "load_skill": {
     "description": "加载一个本地 skill 的完整内容，或按路径读取该 skill 目录内的 asset/script 文件内容。",
     "parameters": {
@@ -86,6 +148,44 @@
         }
       },
       "required": ["path"]
+    }
+  },
+  "write_file": {
+    "description": "写入项目内单个文本文件；如果父目录不存在会自动创建，适合生成代码、配置或中间文件。",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "项目根目录内的文件相对路径，或绝对路径（必须仍在项目目录内）。"
+        },
+        "content": {
+          "type": "string",
+          "description": "要写入的完整文本内容。"
+        }
+      },
+      "required": ["path", "content"]
+    }
+  },
+  "edit_file": {
+    "description": "对项目内单个文本文件执行一次精确文本替换，适合小范围修改已有文件。",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "项目根目录内的文件相对路径，或绝对路径（必须仍在项目目录内）。"
+        },
+        "old_text": {
+          "type": "string",
+          "description": "要查找的原始文本，必须与文件内容精确匹配。"
+        },
+        "new_text": {
+          "type": "string",
+          "description": "替换后的新文本。"
+        }
+      },
+      "required": ["path", "old_text", "new_text"]
     }
   },
   "grep_search": {

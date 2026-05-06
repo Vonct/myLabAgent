@@ -2,9 +2,14 @@ import json
 import logging
 import math
 import os
+import posixpath
+import re
+import shutil
 import threading
+import zipfile
 from io import BytesIO
 from pathlib import Path
+from xml.etree import ElementTree as ET
 
 from openai import OpenAI
 from pypdf import PdfReader
@@ -71,7 +76,10 @@ class RAGEngine:
         self.backend_runtime_error = ""
         self.project_root = project_root
         self.records_file = str(project_root / "vector_store.json")
-        self.chroma_path = os.environ.get("RAG_CHROMA_PATH", str(project_root / "chroma_db")).strip() or str(project_root / "chroma_db")
+        self.chroma_path = (
+            os.environ.get("RAG_CHROMA_PATH", str(project_root / "chroma_db")).strip()
+            or str(project_root / "chroma_db")
+        )
         self.collection_name = "docs"
         self.client = None
         self.collection = None
@@ -79,6 +87,20 @@ class RAGEngine:
         self.records = []
         self.embedding_usage_total = {"input_tokens": 0, "total_tokens": 0}
         self.last_embedding_usage = {"input_tokens": 0, "total_tokens": 0}
+        self.enable_image_proxy = os.environ.get("RAG_ENABLE_IMAGE_PROXY", "1").strip().lower() not in {
+            "0",
+            "false",
+            "no",
+        }
+        self.chunk_strategy = os.environ.get("RAG_CHUNK_STRATEGY", "recursive").strip().lower() or "recursive"
+        if self.chunk_strategy not in {"fixed", "recursive"}:
+            self.chunk_strategy = "recursive"
+        self.chunk_size = max(200, int(os.environ.get("RAG_CHUNK_SIZE", "1200")))
+        self.chunk_overlap = max(0, int(os.environ.get("RAG_CHUNK_OVERLAP", "200")))
+        self.embed_batch_size = max(1, int(os.environ.get("RAG_EMBED_BATCH_SIZE", "10")))
+        self.image_context_chars = max(120, int(os.environ.get("RAG_IMAGE_CONTEXT_CHARS", "700")))
+        self.image_store_dir = project_root / "app_data" / "rag_images"
+        self.image_store_dir.mkdir(parents=True, exist_ok=True)
         preferred_backend = os.environ.get("RAG_BACKEND", "chroma").strip().lower()
         if preferred_backend not in {"auto", "chroma", "memory"}:
             preferred_backend = "chroma"
@@ -143,24 +165,449 @@ class RAGEngine:
             )
             self._connect_chroma()
 
-    def _iter_text_chunks(self, reader: PdfReader, chunk_size: int, overlap: int):
-        step = max(1, chunk_size - overlap)
-        for page_index, page in enumerate(reader.pages):
-            extracted = (page.extract_text() or '').strip()
-            if not extracted:
+    def _normalize_text(self, text: str) -> str:
+        lines = [line.rstrip() for line in text.replace("\r\n", "\n").replace("\r", "\n").split("\n")]
+        cleaned_lines: list[str] = []
+        previous_blank = False
+        for line in lines:
+            normalized = " ".join(line.split())
+            if not normalized:
+                if not previous_blank and cleaned_lines:
+                    cleaned_lines.append("")
+                previous_blank = True
                 continue
-            if len(extracted) <= chunk_size:
-                yield page_index, extracted
-                continue
+            cleaned_lines.append(normalized)
+            previous_blank = False
+        return "\n".join(cleaned_lines).strip()
 
-            start = 0
-            while start < len(extracted):
-                chunk = extracted[start:start + chunk_size].strip()
-                if chunk:
-                    yield page_index, chunk
-                if start + chunk_size >= len(extracted):
-                    break
-                start += step
+    def _safe_source_slug(self, filename: str) -> str:
+        slug = re.sub(r"[^A-Za-z0-9._-]+", "_", Path(filename).stem).strip("._")
+        return slug or "document"
+
+    def _source_asset_dir(self, filename: str) -> Path:
+        suffix = Path(filename).suffix.lower().lstrip(".") or "file"
+        return self.image_store_dir / f"{self._safe_source_slug(filename)}_{suffix}"
+
+    def _truncate_context(self, text: str, limit: int | None = None) -> str:
+        normalized = self._normalize_text(text)
+        effective_limit = limit or self.image_context_chars
+        if len(normalized) <= effective_limit:
+            return normalized
+        return normalized[:effective_limit].rstrip() + "..."
+
+    def _normalize_zip_target(self, base_dir: str, target: str) -> str:
+        normalized = posixpath.normpath(posixpath.join(base_dir, target))
+        return normalized.lstrip("./")
+
+    def _ensure_bytes(self, payload) -> bytes:
+        if payload is None:
+            return b""
+        if isinstance(payload, (bytes, bytearray)):
+            return bytes(payload)
+        if hasattr(payload, "read"):
+            return payload.read()
+        return b""
+
+    def _save_image_asset(self, filename: str, asset_name: str, image_bytes: bytes) -> str:
+        if not image_bytes:
+            return ""
+        asset_dir = self._source_asset_dir(filename)
+        asset_dir.mkdir(parents=True, exist_ok=True)
+        cleaned_name = re.sub(r"[^A-Za-z0-9._-]+", "_", asset_name).strip("._") or "image.bin"
+        asset_path = asset_dir / cleaned_name
+        with open(asset_path, "wb") as fw:
+            fw.write(image_bytes)
+        return str(asset_path)
+
+    def _build_image_proxy_text(
+        self,
+        *,
+        filename: str,
+        file_type: str,
+        image_index: int,
+        context_text: str = "",
+        page_index: int | None = None,
+        asset_name: str = "",
+        anchor_text: str = "",
+    ) -> str:
+        lines = [
+            "[图片代理记录]",
+            f"[来源: {filename}]",
+            f"[文件类型: {file_type}]",
+            f"[图片序号: {image_index + 1}]",
+        ]
+        if page_index is not None:
+            lines.append(f"[页码: {page_index + 1}]")
+        if asset_name:
+            lines.append(f"[图片文件: {asset_name}]")
+        anchor = self._truncate_context(anchor_text, 220)
+        if anchor:
+            lines.append(f"[图片锚点文本: {anchor}]")
+        context = self._truncate_context(context_text)
+        if context:
+            lines.append(f"[周边上下文]\n{context}")
+        else:
+            lines.append("[周边上下文]\n当前未提取到图片附近的正文，后续可接 OCR 或视觉摘要增强。")
+        return "\n".join(lines)
+
+    def _extract_pdf_page_images(self, page, page_index: int, filename: str, page_text: str) -> list[dict]:
+        if not self.enable_image_proxy:
+            return []
+        try:
+            page_images = list(getattr(page, "images", []) or [])
+        except Exception:
+            LOGGER.exception("Failed to inspect PDF page images: %s page=%s", filename, page_index)
+            return []
+
+        segments: list[dict] = []
+        for image_index, image_obj in enumerate(page_images):
+            image_name = str(getattr(image_obj, "name", "") or f"page_{page_index + 1}_image_{image_index + 1}.bin")
+            image_bytes = self._ensure_bytes(getattr(image_obj, "data", None))
+            if not image_bytes:
+                pil_image = getattr(image_obj, "image", None)
+                if pil_image is not None and hasattr(pil_image, "save"):
+                    buffer = BytesIO()
+                    image_format = str(getattr(pil_image, "format", "") or "PNG").upper()
+                    pil_image.save(buffer, format=image_format)
+                    image_bytes = buffer.getvalue()
+                    if "." not in image_name:
+                        image_name = f"{image_name}.{image_format.lower()}"
+            asset_path = self._save_image_asset(filename, image_name, image_bytes)
+            if not asset_path:
+                continue
+            segments.append(
+                {
+                    "text": self._build_image_proxy_text(
+                        filename=filename,
+                        file_type="pdf",
+                        image_index=image_index,
+                        page_index=page_index,
+                        asset_name=Path(asset_path).name,
+                        context_text=page_text,
+                    ),
+                    "metadata": {
+                        "page_index": page_index,
+                        "segment_index": page_index,
+                        "segment_kind": "image_proxy",
+                        "record_type": "image_proxy",
+                        "image_index": image_index,
+                        "asset_path": asset_path,
+                    },
+                }
+            )
+        return segments
+
+    def _extract_pdf_segments(self, file_content: BytesIO, filename: str) -> list[dict]:
+        reader = PdfReader(file_content)
+        segments: list[dict] = []
+        for page_index, page in enumerate(reader.pages):
+            extracted = self._normalize_text(page.extract_text() or "")
+            if not extracted:
+                extracted = ""
+            if extracted:
+                segments.append(
+                    {
+                        "text": extracted,
+                        "metadata": {
+                            "page_index": page_index,
+                            "segment_index": page_index,
+                            "segment_kind": "page",
+                            "record_type": "text",
+                        },
+                    }
+                )
+            segments.extend(self._extract_pdf_page_images(page, page_index, filename, extracted))
+        return segments
+
+    def _extract_plaintext_segments(self, file_content: BytesIO) -> list[dict]:
+        text = file_content.read().decode("utf-8", errors="ignore")
+        normalized = self._normalize_text(text)
+        if not normalized:
+            return []
+        return [
+            {
+                "text": normalized,
+                "metadata": {
+                    "segment_index": 0,
+                    "segment_kind": "document",
+                },
+            }
+        ]
+
+    def _extract_docx_paragraph_text(self, paragraph, namespace: dict[str, str]) -> str:
+        parts: list[str] = []
+        for node in paragraph.iter():
+            tag = node.tag.rsplit("}", 1)[-1]
+            if tag == "t" and node.text:
+                parts.append(node.text)
+            elif tag == "tab":
+                parts.append("\t")
+            elif tag in {"br", "cr"}:
+                parts.append("\n")
+        return self._normalize_text("".join(parts))
+
+    def _extract_docx_relationships(self, archive: zipfile.ZipFile) -> dict[str, str]:
+        rels_path = "word/_rels/document.xml.rels"
+        if rels_path not in archive.namelist():
+            return {}
+        rels_root = ET.fromstring(archive.read(rels_path))
+        rels: dict[str, str] = {}
+        for rel in rels_root.findall(".//{http://schemas.openxmlformats.org/package/2006/relationships}Relationship"):
+            rel_id = str(rel.attrib.get("Id", "")).strip()
+            target = str(rel.attrib.get("Target", "")).strip()
+            if rel_id and target:
+                rels[rel_id] = self._normalize_zip_target("word", target)
+        return rels
+
+    def _extract_docx_segments(self, file_content: BytesIO, filename: str) -> list[dict]:
+        file_content.seek(0)
+        namespace = {
+            "w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main",
+            "a": "http://schemas.openxmlformats.org/drawingml/2006/main",
+            "r": "http://schemas.openxmlformats.org/officeDocument/2006/relationships",
+            "v": "urn:schemas-microsoft-com:vml",
+        }
+        try:
+            with zipfile.ZipFile(file_content) as archive:
+                xml_bytes = archive.read("word/document.xml")
+                rels = self._extract_docx_relationships(archive)
+                root = ET.fromstring(xml_bytes)
+                body = root.find(".//w:body", namespace)
+                if body is None:
+                    return []
+
+                items: list[dict] = []
+                paragraphs: list[str] = []
+                image_counter = 0
+                for child in list(body):
+                    tag = child.tag.rsplit("}", 1)[-1]
+                    if tag != "p":
+                        continue
+                    paragraph_text = self._extract_docx_paragraph_text(child, namespace)
+                    if paragraph_text:
+                        paragraphs.append(paragraph_text)
+                        items.append({"type": "paragraph", "text": paragraph_text})
+
+                    embed_ids: list[str] = []
+                    for blip in child.findall(".//a:blip", namespace):
+                        rel_id = str(blip.attrib.get(f"{{{namespace['r']}}}embed", "")).strip()
+                        if rel_id:
+                            embed_ids.append(rel_id)
+                    for image_data in child.findall(".//v:imagedata", namespace):
+                        rel_id = str(image_data.attrib.get(f"{{{namespace['r']}}}id", "")).strip()
+                        if rel_id:
+                            embed_ids.append(rel_id)
+
+                    for rel_id in embed_ids:
+                        items.append(
+                            {
+                                "type": "image_ref",
+                                "rel_id": rel_id,
+                                "anchor_text": paragraph_text,
+                                "image_index": image_counter,
+                            }
+                        )
+                        image_counter += 1
+
+                segments: list[dict] = []
+                normalized = "\n\n".join(paragraphs).strip()
+                if normalized:
+                    segments.append(
+                        {
+                            "text": normalized,
+                            "metadata": {
+                                "segment_index": 0,
+                                "segment_kind": "document",
+                                "record_type": "text",
+                            },
+                        }
+                    )
+
+                if not self.enable_image_proxy:
+                    return segments
+
+                for index, item in enumerate(items):
+                    if item.get("type") != "image_ref":
+                        continue
+                    rel_target = rels.get(str(item.get("rel_id", "")).strip(), "")
+                    if not rel_target:
+                        continue
+                    try:
+                        image_bytes = archive.read(rel_target)
+                    except KeyError:
+                        LOGGER.warning("DOCX image target missing: %s target=%s", filename, rel_target)
+                        continue
+
+                    before_text = ""
+                    after_text = ""
+                    for cursor in range(index - 1, -1, -1):
+                        if items[cursor].get("type") == "paragraph":
+                            before_text = str(items[cursor].get("text", "")).strip()
+                            break
+                    for cursor in range(index + 1, len(items)):
+                        if items[cursor].get("type") == "paragraph":
+                            after_text = str(items[cursor].get("text", "")).strip()
+                            break
+
+                    context_parts: list[str] = []
+                    for candidate in [item.get("anchor_text", ""), before_text, after_text]:
+                        text = self._normalize_text(str(candidate or ""))
+                        if text and text not in context_parts:
+                            context_parts.append(text)
+                    image_name = Path(rel_target).name or f"docx_image_{item.get('image_index', 0) + 1}.bin"
+                    asset_path = self._save_image_asset(filename, image_name, image_bytes)
+                    if not asset_path:
+                        continue
+                    image_index = int(item.get("image_index", 0))
+                    segments.append(
+                        {
+                            "text": self._build_image_proxy_text(
+                                filename=filename,
+                                file_type="docx",
+                                image_index=image_index,
+                                asset_name=Path(asset_path).name,
+                                anchor_text=str(item.get("anchor_text", "") or ""),
+                                context_text="\n\n".join(context_parts),
+                            ),
+                            "metadata": {
+                                "segment_index": image_index,
+                                "segment_kind": "image_proxy",
+                                "record_type": "image_proxy",
+                                "image_index": image_index,
+                                "asset_path": asset_path,
+                            },
+                        }
+                    )
+                return segments
+        except KeyError as exc:
+            raise ValueError("DOCX 文件缺少 word/document.xml") from exc
+
+    def _extract_document_segments(self, file_content: BytesIO, filename: str) -> list[dict]:
+        suffix = Path(filename).suffix.lower()
+        file_content.seek(0)
+        if suffix == ".pdf":
+            return self._extract_pdf_segments(file_content, filename)
+        if suffix in {".txt", ".md"}:
+            return self._extract_plaintext_segments(file_content)
+        if suffix == ".docx":
+            return self._extract_docx_segments(file_content, filename)
+        raise ValueError(f"Unsupported file type: {suffix or 'unknown'}")
+
+    def _iter_fixed_chunks(self, text: str, chunk_size: int, overlap: int):
+        step = max(1, chunk_size - overlap)
+        if len(text) <= chunk_size:
+            yield text
+            return
+        start = 0
+        while start < len(text):
+            chunk = text[start:start + chunk_size].strip()
+            if chunk:
+                yield chunk
+            if start + chunk_size >= len(text):
+                break
+            start += step
+
+    def _split_with_separator(self, text: str, separator: str) -> list[str]:
+        if not separator or separator not in text:
+            return [text]
+        pieces = text.split(separator)
+        results: list[str] = []
+        for index, piece in enumerate(pieces):
+            candidate = piece + separator if index < len(pieces) - 1 else piece
+            candidate = candidate.strip()
+            if candidate:
+                results.append(candidate)
+        return results or [text]
+
+    def _recursive_split(self, text: str, chunk_size: int, separators: list[str]) -> list[str]:
+        normalized = text.strip()
+        if not normalized:
+            return []
+        if len(normalized) <= chunk_size:
+            return [normalized]
+        if not separators:
+            return list(self._iter_fixed_chunks(normalized, chunk_size, self.chunk_overlap))
+
+        separator = separators[0]
+        pieces = self._split_with_separator(normalized, separator)
+        if len(pieces) == 1:
+            return self._recursive_split(normalized, chunk_size, separators[1:])
+
+        final_chunks: list[str] = []
+        buffer = ""
+        for piece in pieces:
+            candidate = f"{buffer}{piece}" if buffer else piece
+            if len(candidate) <= chunk_size:
+                buffer = candidate
+                continue
+            if buffer:
+                final_chunks.extend(self._recursive_split(buffer, chunk_size, separators[1:]))
+            buffer = piece
+
+        if buffer:
+            final_chunks.extend(self._recursive_split(buffer, chunk_size, separators[1:]))
+        return final_chunks
+
+    def _merge_with_overlap(self, pieces: list[str], chunk_size: int, overlap: int) -> list[str]:
+        if not pieces:
+            return []
+        merged: list[str] = []
+        current = ""
+        for piece in pieces:
+            piece = piece.strip()
+            if not piece:
+                continue
+            candidate = f"{current}\n{piece}".strip() if current else piece
+            if len(candidate) <= chunk_size:
+                current = candidate
+                continue
+            if current:
+                merged.append(current)
+                carry = current[-overlap:].strip() if overlap > 0 else ""
+                current = f"{carry}\n{piece}".strip() if carry else piece
+            else:
+                merged.append(piece)
+                current = ""
+        if current:
+            merged.append(current)
+        return merged
+
+    def _iter_recursive_chunks(self, text: str, chunk_size: int, overlap: int):
+        separators = ["\n\n", "\n", "。", "！", "？", "；", ".", "!", "?", ";", "，", ",", " "]
+        pieces = self._recursive_split(text, chunk_size, separators)
+        for chunk in self._merge_with_overlap(pieces, chunk_size, overlap):
+            chunk_text = chunk.strip()
+            if chunk_text:
+                yield chunk_text
+
+    def _iter_segment_chunks(self, segment: dict):
+        text = str(segment.get("text", "")).strip()
+        if not text:
+            return
+        metadata = dict(segment.get("metadata") or {})
+        if self.chunk_strategy == "fixed":
+            iterator = self._iter_fixed_chunks(text, self.chunk_size, self.chunk_overlap)
+        else:
+            iterator = self._iter_recursive_chunks(text, self.chunk_size, self.chunk_overlap)
+        for chunk in iterator:
+            chunk_text = chunk.strip()
+            if chunk_text:
+                yield metadata, chunk_text
+
+    def _delete_existing_source(self, filename: str):
+        asset_dir = self._source_asset_dir(filename)
+        if asset_dir.exists():
+            shutil.rmtree(asset_dir, ignore_errors=True)
+        if self.backend == "chroma":
+            self._ensure_chroma_connection()
+            try:
+                self.collection.delete(where={"source": filename})
+            except Exception:
+                LOGGER.exception("Failed to delete existing source from chroma: %s", filename)
+        else:
+            self.records = [
+                item for item in self.records if item.get("metadata", {}).get("source") != filename
+            ]
 
     def _flush_batch(self, ids, chunks, metadatas):
         if not chunks:
@@ -188,37 +635,42 @@ class RAGEngine:
     def process_file(self, file_content: BytesIO, filename: str) -> str:
         try:
             LOGGER.info("Start processing file: %s", filename)
-            reader = PdfReader(file_content)
-            chunk_size = 1500
-            overlap = 200
-            embed_batch_size = 10
+            file_content.seek(0)
+            segments = self._extract_document_segments(file_content, filename)
             file_usage = {"input_tokens": 0, "total_tokens": 0}
             batch_ids = []
             batch_chunks = []
             batch_metadatas = []
             total_chunks = 0
+            file_type = Path(filename).suffix.lower().lstrip(".") or "unknown"
+            self._delete_existing_source(filename)
 
-            for page_index, chunk in self._iter_text_chunks(reader, chunk_size, overlap):
-                chunk_text = chunk.strip()
-                if not chunk_text:
-                    continue
-                batch_ids.append(f"{filename}_{total_chunks}")
-                batch_chunks.append(chunk_text)
-                batch_metadatas.append(
-                    {"source": filename, "chunk_index": total_chunks, "page_index": page_index}
-                )
-                total_chunks += 1
+            for segment in segments:
+                for segment_metadata, chunk in self._iter_segment_chunks(segment):
+                    chunk_text = chunk.strip()
+                    if not chunk_text:
+                        continue
+                    batch_ids.append(f"{filename}_{total_chunks}")
+                    batch_chunks.append(chunk_text)
+                    metadata = {
+                        "source": filename,
+                        "file_type": file_type,
+                        "chunk_index": total_chunks,
+                    }
+                    metadata.update(segment_metadata)
+                    batch_metadatas.append(metadata)
+                    total_chunks += 1
 
-                if len(batch_chunks) >= embed_batch_size:
-                    usage = self._flush_batch(batch_ids, batch_chunks, batch_metadatas)
-                    file_usage["input_tokens"] += usage["input_tokens"]
-                    file_usage["total_tokens"] += usage["total_tokens"]
-                    LOGGER.info(
-                        "Processed embedding batch for %s: chunk_count=%s",
-                        filename,
-                        total_chunks,
-                    )
-                    batch_ids, batch_chunks, batch_metadatas = [], [], []
+                    if len(batch_chunks) >= self.embed_batch_size:
+                        usage = self._flush_batch(batch_ids, batch_chunks, batch_metadatas)
+                        file_usage["input_tokens"] += usage["input_tokens"]
+                        file_usage["total_tokens"] += usage["total_tokens"]
+                        LOGGER.info(
+                            "Processed embedding batch for %s: chunk_count=%s",
+                            filename,
+                            total_chunks,
+                        )
+                        batch_ids, batch_chunks, batch_metadatas = [], [], []
 
             if batch_chunks:
                 usage = self._flush_batch(batch_ids, batch_chunks, batch_metadatas)
@@ -244,7 +696,7 @@ class RAGEngine:
             )
 
             return (
-                f"Processed {filename}: generated {total_chunks} chunks. "
+                f"Processed {filename}: generated {total_chunks} chunks with `{self.chunk_strategy}` strategy. "
                 f"Embedding tokens this run: input {self.last_embedding_usage['input_tokens']}, "
                 f"total {self.last_embedding_usage['total_tokens']}."
             )
@@ -272,6 +724,13 @@ class RAGEngine:
                             "content": doc,
                             "source": meta.get("source", "unknown"),
                             "score": results["distances"][0][i] if "distances" in results else 0,
+                            "file_type": meta.get("file_type", "unknown"),
+                            "page_index": meta.get("page_index"),
+                            "segment_kind": meta.get("segment_kind"),
+                            "chunk_index": meta.get("chunk_index"),
+                            "record_type": meta.get("record_type", "text"),
+                            "asset_path": meta.get("asset_path"),
+                            "image_index": meta.get("image_index"),
                         }
                     )
             return retrieved_docs
@@ -292,6 +751,13 @@ class RAGEngine:
                 "content": item["document"],
                 "source": item["metadata"].get("source", "unknown"),
                 "score": score,
+                "file_type": item["metadata"].get("file_type", "unknown"),
+                "page_index": item["metadata"].get("page_index"),
+                "segment_kind": item["metadata"].get("segment_kind"),
+                "chunk_index": item["metadata"].get("chunk_index"),
+                "record_type": item["metadata"].get("record_type", "text"),
+                "asset_path": item["metadata"].get("asset_path"),
+                "image_index": item["metadata"].get("image_index"),
             }
             for score, item in top
         ]
