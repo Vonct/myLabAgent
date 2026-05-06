@@ -52,6 +52,9 @@ class SessionStore:
             "tasks": [],
             "memories": [],
             "generated_images": [],
+            "compacted_summary": "",
+            "compacted_until_message_count": 0,
+            "compactions": [],
         }
         self._write_session(payload)
         return payload
@@ -69,6 +72,9 @@ class SessionStore:
             return
         payload.setdefault("memories", [])
         payload.setdefault("generated_images", [])
+        payload.setdefault("compacted_summary", "")
+        payload.setdefault("compacted_until_message_count", 0)
+        payload.setdefault("compactions", [])
         payload["messages"].append(message)
         payload["updated_at"] = _utc_now()
         self._write_session(payload)
@@ -79,6 +85,9 @@ class SessionStore:
             payload = self.create_session()
         payload.setdefault("memories", [])
         payload.setdefault("generated_images", [])
+        payload.setdefault("compacted_summary", "")
+        payload.setdefault("compacted_until_message_count", 0)
+        payload.setdefault("compactions", [])
         task = TaskRecord(task_id=uuid4().hex, prompt=prompt)
         payload["tasks"].append(task.__dict__)
         payload["updated_at"] = _utc_now()
@@ -91,6 +100,9 @@ class SessionStore:
             return
         payload.setdefault("memories", [])
         payload.setdefault("generated_images", [])
+        payload.setdefault("compacted_summary", "")
+        payload.setdefault("compacted_until_message_count", 0)
+        payload.setdefault("compactions", [])
         for task in payload["tasks"]:
             if task["task_id"] == task_id:
                 task["tool_events"].append(event)
@@ -105,6 +117,9 @@ class SessionStore:
             return
         payload.setdefault("memories", [])
         payload.setdefault("generated_images", [])
+        payload.setdefault("compacted_summary", "")
+        payload.setdefault("compacted_until_message_count", 0)
+        payload.setdefault("compactions", [])
         for task in payload["tasks"]:
             if task["task_id"] == task_id:
                 task["status"] = status
@@ -129,6 +144,9 @@ class SessionStore:
             return
         payload.setdefault("memories", [])
         payload.setdefault("generated_images", [])
+        payload.setdefault("compacted_summary", "")
+        payload.setdefault("compacted_until_message_count", 0)
+        payload.setdefault("compactions", [])
         payload["memories"].append(memory)
         payload["updated_at"] = _utc_now()
         self._write_session(payload)
@@ -139,6 +157,9 @@ class SessionStore:
             return
         payload.setdefault("memories", [])
         payload.setdefault("generated_images", [])
+        payload.setdefault("compacted_summary", "")
+        payload.setdefault("compacted_until_message_count", 0)
+        payload.setdefault("compactions", [])
         stored_asset = {
             key: value
             for key, value in image_asset.items()
@@ -161,9 +182,56 @@ class SessionStore:
                 return image_asset
         return None
 
+    def get_context_compaction(self, session_id: str) -> dict[str, Any]:
+        payload = self.load_session(session_id) or {}
+        return {
+            "summary": str(payload.get("compacted_summary", "") or ""),
+            "until_message_count": int(payload.get("compacted_until_message_count", 0) or 0),
+            "compactions": payload.get("compactions", []) if isinstance(payload.get("compactions", []), list) else [],
+        }
+
+    def archive_messages(self, session_id: str, messages: list[dict[str, Any]], *, reason: str) -> str:
+        archive_dir = self.root.parent / "transcripts" / session_id
+        archive_dir.mkdir(parents=True, exist_ok=True)
+        stamp = _utc_now().replace(":", "").replace("+", "_").replace(".", "_")
+        archive_path = archive_dir / f"{reason}_{stamp}.jsonl"
+        with open(archive_path, "w", encoding="utf-8") as f:
+            for message in messages:
+                f.write(json.dumps(message, ensure_ascii=False) + "\n")
+        return str(archive_path)
+
+    def save_context_compaction(
+        self,
+        session_id: str,
+        *,
+        summary: str,
+        until_message_count: int,
+        archive_path: str,
+    ) -> None:
+        payload = self.load_session(session_id)
+        if payload is None:
+            return
+        payload.setdefault("memories", [])
+        payload.setdefault("generated_images", [])
+        payload.setdefault("compactions", [])
+        payload["compacted_summary"] = summary
+        payload["compacted_until_message_count"] = max(0, int(until_message_count))
+        payload["compactions"].append(
+            {
+                "created_at": _utc_now(),
+                "until_message_count": payload["compacted_until_message_count"],
+                "archive_path": archive_path,
+            }
+        )
+        payload["updated_at"] = _utc_now()
+        self._write_session(payload)
+
     def _write_session(self, payload: dict[str, Any]) -> None:
         payload.setdefault("memories", [])
         payload.setdefault("generated_images", [])
+        payload.setdefault("compacted_summary", "")
+        payload.setdefault("compacted_until_message_count", 0)
+        payload.setdefault("compactions", [])
         path = self._resolve_session_path(
             payload["session_id"],
             created_at=payload.get("created_at", ""),

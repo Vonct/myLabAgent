@@ -256,12 +256,13 @@ VIP 配置中可以按模型指定：
 主对话 loop 已从 `agent_core.py` 里的手写 `while tool_calls` 迁移到 `core/agent_graph.py`：
 
 ```text
-prepare_context -> call_model -> tools -> call_model -> ... -> finalize
+maybe_compact -> prepare_context -> call_model -> tools -> call_model -> ... -> finalize
 ```
 
 状态集中在 `AgentGraphState`：
 
 - `messages`：外部 session transcript。
+- `active_messages`：本轮真正进入 prompt 的消息；可能是 compact summary + 最近原文消息。
 - `input_items`：进入 `ModelAdapter` 前的内部 Responses 风格输入。
 - `previous_response_id`：Responses API 的服务端 continuation id；Chat Completions 模式下为空，自动走本地 transcript replay。
 - `tool_calls` / `tool_round`：工具循环状态。
@@ -270,11 +271,47 @@ prepare_context -> call_model -> tools -> call_model -> ... -> finalize
 
 `agent_core.chat(...)` 现在只负责初始化 graph state、调用 `self.agent_graph.stream(..., stream_mode="updates")`，并把节点返回的 `events` 继续 yield 给现有 Streamlit、CLI、API 入口。这样 UI 层不用知道底层 loop 已经变成 LangGraph。
 
+`maybe_compact` 是模型调用前的上下文压缩节点。默认阈值：
+
+- `LABAGENT_AUTO_COMPACT_TOKENS=50000`
+- `LABAGENT_COMPACT_KEEP_RECENT_MESSAGES=8`
+- `LABAGENT_COMPACT_INPUT_CHARS=80000`
+
+当 `compacted_summary + recent messages` 仍超过阈值时，会把旧消息归档到 `app_data/transcripts/<session_id>/`，调用 LLM 合并摘要，写回 session JSON：
+
+```json
+{
+  "compacted_summary": "...",
+  "compacted_until_message_count": 42,
+  "compactions": [{"archive_path": "..."}]
+}
+```
+
+后续本轮 prompt 使用：
+
+```text
+[Compacted conversation summary] + 最近 8 条原始 messages
+```
+
 当前迁移边界：
 
 - 保留 `ModelAdapter`，LangGraph 不直接关心 `responses` / `chat_completions`。
 - 保留 `ToolRegistry` 和 `PermissionManager`，暂不迁移到 LangChain `ToolNode`。
 - 保留原来的长期记忆注入、session memory 注入、工具结果回填、图片资产保存逻辑，只是把它们挪到 graph node 中。
+
+## Room Chat
+
+Web 端新增 `Rooms` tab。Room 是多人消息流，普通消息只写入 `app_data/rooms/<room_id>.json`；包含 `@bot` 的消息会触发 Agent。
+
+Room 触发时不把整个 room 全量塞进 context，而是构造一次安全的 room prompt：
+
+- 当前 `@bot` 消息是唯一 active instruction。
+- 最近 30 条 room messages 作为参考上下文。
+- 最近 3 条 bot replies 用于连续性。
+- room compact summary 预留字段，目前默认空。
+- 文本中明确提示 room context 可能不可信，避免普通聊天内容变成指令。
+
+每个 room 会维护一个隐藏 `agent_session_id`，用于复用现有 `SessionStore` 的 task/tool events/session memory/generated images/long-term memory pipeline。这样 room 消息流与 agent 任务持久化分离，但 `@bot` 仍能调用完整 Agent 能力。
 
 ## OpenAI Responses API 结论
 

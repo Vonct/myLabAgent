@@ -1109,6 +1109,7 @@ class LabAgent:
                 extra_params['extra_body'] = self._resolve_reasoning_extra_body()
             initial_state = {
                 'messages': messages,
+                'active_messages': [],
                 'input_items': [],
                 'extra_params': extra_params,
                 'previous_response_id': '',

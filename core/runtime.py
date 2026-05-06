@@ -48,6 +48,8 @@ def init_session_state(session_store: SessionStore) -> None:
         "reasoning_mode": False,
         "uploader_key": 0,
         "task_id": None,
+        "selected_room_id": "",
+        "room_display_name": "",
     }
     for key, value in defaults.items():
         if key not in st.session_state:

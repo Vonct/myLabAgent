@@ -15,6 +15,8 @@
 - `cli.py`：CLI 入口，支持单轮命令和多轮 REPL
 - `agent_core.py`：核心 Agent loop，负责模型调用和 tool-calling 闭环
 - `core/agent_graph.py`：LangGraph 状态图，负责主对话 loop 编排
+- `core/context_compactor.py`：上下文自动压缩，负责 compact summary 与 transcript 归档
+- `core/room_store.py`：Room 聊天室 JSON 持久化
 - `core/model_adapter.py`：主模型调用适配层，负责 `responses` / `chat_completions` 协议转换
 - `services/agent_factory.py`：共享 runtime 工厂
 - `services/session_service.py`：session 高层封装
@@ -33,6 +35,8 @@
 - OpenAI 兼容 `responses.create(...)` / `chat.completions.create(...)` 调用
 - 工具调用闭环
 - 基础任务与 session 持久化
+- Room 聊天室，普通消息入 room，`@bot` 触发 Agent
+- 超阈值自动 compact，保留 summary + 最近消息进入上下文
 
 ### 2. RAG 检索增强
 - PDF 文本提取

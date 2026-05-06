@@ -5,9 +5,12 @@ from typing import Any, Literal, TypedDict
 
 from langgraph.graph import END, START, StateGraph
 
+from core.context_compactor import maybe_auto_compact_messages
+
 
 class AgentGraphState(TypedDict):
     messages: list[dict[str, Any]]
+    active_messages: list[dict[str, Any]]
     input_items: list[dict[str, Any]]
     extra_params: dict[str, Any]
     previous_response_id: str
@@ -27,18 +30,28 @@ class AgentGraphState(TypedDict):
 
 
 def build_agent_graph(agent: Any):
+    def maybe_compact(state: AgentGraphState) -> dict[str, Any]:
+        active_messages, events = maybe_auto_compact_messages(
+            agent,
+            messages=state['messages'],
+            session_store=state.get('session_store'),
+            session_id=state.get('session_id'),
+        )
+        return {'active_messages': active_messages, 'events': events}
+
     def prepare_context(state: AgentGraphState) -> dict[str, Any]:
-        conversation_items = agent._prepare_messages_for_responses(state['messages'])
+        active_messages = state.get('active_messages') or state['messages']
+        conversation_items = agent._prepare_messages_for_responses(active_messages)
         context_items: list[dict[str, Any]] = []
 
-        long_term_memory_context = agent._build_long_term_memory_context(state['messages'])
+        long_term_memory_context = agent._build_long_term_memory_context(active_messages)
         if long_term_memory_context:
             context_items.append({'role': 'user', 'content': long_term_memory_context})
 
         session_store = state.get('session_store')
         session_id = state.get('session_id')
         if agent._is_memory_injection_enabled() and session_store and session_id:
-            memory_context = agent._build_memory_context(session_store, session_id, state['messages'])
+            memory_context = agent._build_memory_context(session_store, session_id, active_messages)
             if memory_context:
                 context_items.append({'role': 'user', 'content': memory_context})
 
@@ -202,11 +215,13 @@ def build_agent_graph(agent: Any):
         return 'finalize'
 
     graph = StateGraph(AgentGraphState)
+    graph.add_node('maybe_compact', maybe_compact)
     graph.add_node('prepare_context', prepare_context)
     graph.add_node('call_model', call_model)
     graph.add_node('tools', execute_tools)
     graph.add_node('finalize', finalize)
-    graph.add_edge(START, 'prepare_context')
+    graph.add_edge(START, 'maybe_compact')
+    graph.add_edge('maybe_compact', 'prepare_context')
     graph.add_edge('prepare_context', 'call_model')
     graph.add_conditional_edges('call_model', route_after_model, {'tools': 'tools', 'finalize': 'finalize'})
     graph.add_edge('tools', 'call_model')

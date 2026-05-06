@@ -4,10 +4,12 @@ from pathlib import Path
 import streamlit as st
 
 from core.runtime import init_session_state
+from core.room_store import RoomStore
 from core.session_store import SessionStore
 from ui_tabs.chat_tab import render_chat_tab
 from ui_tabs.licenses_tab import render_licenses_tab
 from ui_tabs.projects_tab import render_projects_tab
+from ui_tabs.rooms_tab import render_rooms_tab
 from ui_tabs.sidebar import render_sidebar
 
 PROJECT_ROOT = Path(__file__).resolve().parent
@@ -37,6 +39,7 @@ LICENSES_DIR = LICENSE_CATALOG_DIR / "licenses"
 LICENSE_INDEX_FILE = LICENSE_CATALOG_DIR / "index.json"
 CHAT_UPLOAD_DIR = PROJECT_ROOT / "uploads" / "chat_images"
 SESSION_STORE = SessionStore(PROJECT_ROOT / "app_data" / "sessions")
+ROOM_STORE = RoomStore(PROJECT_ROOT / "app_data" / "rooms")
 
 st.set_page_config(
     page_title="LabAgent",
@@ -92,12 +95,19 @@ sidebar_state = render_sidebar(
 )
 
 has_amap_api_key = bool(os.environ.get("AMAP_MAPS_API_KEY", "").strip())
-tab_projects, tab_licenses, tab_chat = st.tabs(["🚀 项目介绍", "📋 License 看板", "🤖 LabAgent"])
+tab_projects, tab_licenses, tab_rooms, tab_chat = st.tabs(["🚀 项目介绍", "📋 License 看板", "💬 Rooms", "🤖 LabAgent"])
 
 with tab_projects:
     render_projects_tab(PROJECT_CATALOG_DIR, PROJECT_INDEX_FILE, PROJECTS_DIR)
 with tab_licenses:
     render_licenses_tab(LICENSE_CATALOG_DIR, LICENSE_INDEX_FILE, LICENSES_DIR)
+with tab_rooms:
+    render_rooms_tab(
+        chat_ready=sidebar_state["chat_ready"],
+        supports_thinking=sidebar_state["supports_thinking"],
+        room_store=ROOM_STORE,
+        session_store=SESSION_STORE,
+    )
 with tab_chat:
     render_chat_tab(
         sidebar_state["chat_ready"],
