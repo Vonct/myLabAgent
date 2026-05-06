@@ -11,16 +11,24 @@ def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _normalize_room_name(name: str) -> str:
+    return ' '.join(str(name or '').strip().lower().split())
+
+
 class RoomStore:
     def __init__(self, root: Path):
         self.root = root
         self.root.mkdir(parents=True, exist_ok=True)
 
     def create_room(self, name: str) -> dict[str, Any]:
+        room_name = name.strip() or 'Untitled room'
+        existing = self.find_room_by_name(room_name)
+        if existing:
+            raise ValueError(f'Room already exists: {room_name}')
         room_id = uuid4().hex
         payload = {
             'room_id': room_id,
-            'name': name.strip() or 'Untitled room',
+            'name': room_name,
             'created_at': _utc_now(),
             'updated_at': _utc_now(),
             'messages': [],
@@ -29,6 +37,15 @@ class RoomStore:
         }
         self._write_room(payload)
         return payload
+
+    def find_room_by_name(self, name: str) -> dict[str, Any] | None:
+        normalized = _normalize_room_name(name)
+        if not normalized:
+            return None
+        for room in self.list_rooms():
+            if _normalize_room_name(str(room.get('name', '') or '')) == normalized:
+                return room
+        return None
 
     def load_room(self, room_id: str) -> dict[str, Any] | None:
         path = self._room_path(room_id)

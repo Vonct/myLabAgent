@@ -116,14 +116,6 @@ def render_rooms_tab(
     st.caption('普通消息只进入 room；包含 @bot 的消息会触发 Agent，并把最近 room 上下文作为参考材料。')
 
     rooms = room_store.list_rooms()
-    create_col, pick_col = st.columns([0.35, 0.65], vertical_alignment='bottom')
-    with create_col:
-        new_room_name = st.text_input('新建 room', placeholder='例如：项目讨论室')
-        if st.button('创建 room', disabled=not new_room_name.strip()):
-            room = room_store.create_room(new_room_name)
-            st.session_state.selected_room_id = room['room_id']
-            st.rerun()
-
     if not rooms:
         room = room_store.create_room('General')
         st.session_state.selected_room_id = room['room_id']
@@ -133,8 +125,43 @@ def render_rooms_tab(
     room_ids = [room['room_id'] for room in rooms]
     selected_room_id = st.session_state.get('selected_room_id') or room_ids[0]
     selected_index = room_ids.index(selected_room_id) if selected_room_id in room_ids else 0
+
+    create_col, pick_col = st.columns([0.46, 0.54], vertical_alignment='bottom')
+    with create_col:
+        st.markdown('**新建 room**')
+        name_col, button_col = st.columns([0.68, 0.32], vertical_alignment='bottom')
+        with name_col:
+            new_room_name = st.text_input(
+                'Room 名称',
+                placeholder='例如：项目讨论室',
+                label_visibility='collapsed',
+                key='new_room_name',
+            )
+        with button_col:
+            create_clicked = st.button(
+                '创建',
+                disabled=not new_room_name.strip(),
+                use_container_width=True,
+                key='create_room_button',
+            )
+        if create_clicked:
+            existing_room = room_store.find_room_by_name(new_room_name)
+            if existing_room:
+                st.warning(f"Room `{existing_room['name']}` 已存在，请换一个名称。")
+                st.session_state.selected_room_id = existing_room['room_id']
+            else:
+                room = room_store.create_room(new_room_name)
+                st.session_state.selected_room_id = room['room_id']
+                st.rerun()
+
     with pick_col:
-        selected_label = st.selectbox('进入 room', room_labels, index=selected_index)
+        st.markdown('**进入 room**')
+        selected_label = st.selectbox(
+            '进入 room',
+            room_labels,
+            index=selected_index,
+            label_visibility='collapsed',
+        )
         st.session_state.selected_room_id = room_ids[room_labels.index(selected_label)]
 
     room_id = st.session_state.selected_room_id
