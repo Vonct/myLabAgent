@@ -8,6 +8,7 @@ env/
 chroma_db/
 chroma_db_fresh/
 uploads/
+static/documents/
 vip_config.json
 .trae/
 app_data/sessions/

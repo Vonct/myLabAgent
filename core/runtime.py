@@ -42,6 +42,7 @@ def init_session_state(session_store: SessionStore) -> None:
         "vip_profile": None,
         "applied_config": None,
         "selected_project_id": None,
+        "selected_document_id": None,
         "pending_chat_image_path": None,
         "pending_chat_image_name": "",
         "auth_mode": "手动输入",
